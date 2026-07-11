@@ -79,7 +79,9 @@ for line in ".env" "*.local" ".loopwork/logs/" ".loopwork/batch.flag" "node_modu
   grep -qxF "$line" .gitignore || echo "$line" >> .gitignore
 done
 
-# 6. 首次存档
+# 6. 首次存档（全新机器可能没有 git 身份——项目内兜底，不碰全局配置）
+git config user.name  >/dev/null 2>&1 || git config user.name "Loopwork User"
+git config user.email >/dev/null 2>&1 || git config user.email "loopwork@local"
 if ! git rev-parse HEAD >/dev/null 2>&1; then
   git add -A && git commit -qm "存档: Loopwork 项目初始化"
   echo "[init] 首次存档完成"

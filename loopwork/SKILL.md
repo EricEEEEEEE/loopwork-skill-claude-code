@@ -7,11 +7,11 @@ hooks:
     - matcher: "Edit|Write|MultiEdit"
       hooks:
         - type: command
-          command: "python3 \"$CLAUDE_PROJECT_DIR/.loopwork/hooks/guard_edits.py\""
+          command: "G=\"$CLAUDE_PROJECT_DIR/.loopwork/hooks/guard_edits.py\"; if [ -f \"$G\" ]; then python3 \"$G\"; fi"
     - matcher: "Bash"
       hooks:
         - type: command
-          command: "python3 \"$CLAUDE_PROJECT_DIR/.loopwork/hooks/guard_bash.py\""
+          command: "G=\"$CLAUDE_PROJECT_DIR/.loopwork/hooks/guard_bash.py\"; if [ -f \"$G\" ]; then python3 \"$G\"; fi"
 ---
 
 # Loopwork · 循环工作法向导
