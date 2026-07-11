@@ -102,6 +102,12 @@ def main(argv):
         key, val = argv[2], argv[3]
         st[key] = int(val) if val.isdigit() and key not in ("stage", "phase") else val
         save(st)
+        if key == "phase":  # 审计留痕：围栏开锁/上锁必须可追溯
+            try:
+                with open(os.path.join(root(), "JOURNAL.md"), "a", encoding="utf-8") as jf:
+                    jf.write(f"- [audit] phase → {val} @ {st['last_session']}\n")
+            except Exception:
+                pass
         print(f"{key}={st[key]}")
     elif cmd == "bump-round":
         st["round_count"] = int(st.get("round_count", 0)) + 1

@@ -1,7 +1,7 @@
 # Loopwork Skill — 项目文档（PROJECT.md）
 
 > 工作名：**Loopwork Skill**（对外名称待定，见 §12）
-> 状态：项目文档 v1.1 草稿（v1.1 补入下半场·循环模式；六文档流水线第 1 步：项目文档 → 细化 → 宪法 → 规格 → 计划 → 任务）
+> 状态：项目文档 v1.2（v1.1 补入下半场·循环模式；v1.2 同步实现细节：六机器脚本 / state schema / 仓库自带考题）
 > 日期：2026-07-11
 > 本文档同时是方法论的自证：我们用 Loopwork 的流程来构建 Loopwork Skill 本身。
 
@@ -362,23 +362,23 @@ skill 做的事：
 
 ```
 loopwork/                      ← 拖进 ~/.claude/skills/ 即安装
-├── SKILL.md                   # ≤500 行：铁律 + 阶段路由 + 状态探测
+├── SKILL.md                   # ≤500 行：铁律 + 点火路由 + 内循环引擎（压缩存活区置顶）
 ├── references/                # 各阶段详细剧本，按需加载、可反复重读
-│   ├── stage-0-setup.md
-│   ├── stage-1-interview.md
-│   ├── stage-2-spec.md
-│   ├── stage-3-plan.md
-│   ├── stage-4-loop.md
-│   ├── stage-5-accept.md
-│   ├── stage-6-ship.md
+│   ├── stage-0-setup.md … stage-6-ship.md   # 首航七阶段
+│   ├── loop-mode.md           # 下半场·循环模式（点火/续单/三档/所有权转移）
 │   ├── quick-lane.md          # 小任务旁路剧本
 │   └── glossary.md            # 白话词典全文
-├── scripts/                   # 确定性动作交给脚本（执行不占上下文）
-│   ├── init_project.sh        # 建项目骨架 + git init + 状态文件
-│   ├── verify.sh              # 跑考题，exit code 裁决
-│   └── progress.py            # 读写 state.json，输出「你在哪」
+├── scripts/                   # 确定性机器（执行不占上下文）
+│   ├── init_project.sh        # 建家：骨架 + git + 状态机 + 围栏接线（幂等）
+│   ├── verify.sh              # 验收裁判：exit code 说了算，fail closed
+│   ├── progress.py            # 状态机 + 进度卡（SessionStart 自动播报；phase 翻转留审计）
+│   ├── guard_edits.py         # 围栏：实现期锁考题/规格/规矩 + 围栏自保 + 越界拦截
+│   ├── guard_bash.py          # 围栏：危险命令 + shell 绕道改写（重定向落点/写型命令参数区判定）
+│   └── stop_batch.py          # 挂机档：Stop 钩子外部计数（满批强制验收/受阻出口/轮数上限）
 └── agents/
     └── reviewer.md            # 只读判卷员（预检成果，两段式：合规 + 质量）
+
+仓库另含 tests/（本项目自己的考题：36 用例回归套件，verify.sh 可直接驱动）
 ```
 
 ### 7.2 三条关键实现机制（全部来自官方文档与实测事故）
@@ -388,20 +388,21 @@ loopwork/                      ← 拖进 ~/.claude/skills/ 即安装
 3. **状态文件 schema（v1 草案）**：
 
 ```json
-// .loopwork/state.json —— 唯一的机器可读状态
+// .loopwork/state.json —— 唯一的机器可读状态（只许经 progress.py 读写，直接编辑会被围栏拦截）
 {
-  "stage": "loop",               // 0-6=首航阶段，loop=循环模式，quick=旁路
+  "schema": 1,
+  "stage": "loop",               // "0"-"6"=首航阶段，"loop"=循环模式，"quick"=旁路
+  "phase": "test-writing",       // 内循环相位：test-writing / implementing（后者触发考题锁）
   "cycle": 3,                    // 外循环圈数：首航=1，此后每续一批 +1
   "project_name": "我的记账本",
-  "tasks_total": 12,
-  "tasks_done": 7,
-  "current_task": "T08-支出分类饼图",
-  "round_count": 9,              // 内循环外部计数器
-  "retry_count": 0,
-  "blocked_open": 2,
-  "last_session": "2026-07-11T15:02:00+08:00",
-  "milestones": ["first_run", "first_cycle_solo"]  // 已庆祝里程碑；first_cycle_solo=首次独立转完一圈
+  "round_count": 9,              // 内循环外部计数器（stop_batch 依赖它，不靠模型自数）
+  "round_cap": 20,               // 轮数硬上限
+  "batch_size": 5,               // 一批做几条，满批强制进验收
+  "milestones": ["first_run", "first_cycle_solo"],  // 已庆祝里程碑，防重复庆祝
+  "env": {"node": "v22.11.0", "python3": "3.9.6"},  // Stage 0 体检结果，Stage 3 选型用
+  "last_session": "2026-07-11T15:02:00+08:00"
 }
+// 任务进度（done/total）与问题本数量不入 state——直接从 tasks.md / BLOCKED.md 实时数（单一事实来源）
 ```
 
 ### 7.3 版本与升级

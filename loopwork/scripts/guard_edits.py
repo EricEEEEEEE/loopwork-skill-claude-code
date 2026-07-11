@@ -38,7 +38,7 @@ def main():
             if rel.startswith(protected[0]) or rel in protected[1:]:
                 print(
                     f"[围栏] 拦截：现在是实现阶段，{rel} 已锁定（考题先红后绿，写实现期间不许改考题/规格/规矩）。"
-                    "确需修改：先向用户说明理由并征得同意，再 progress.py set phase test-writing。",
+                    "确需修改：停下来，向用户说明理由并征得明确同意。",
                     file=sys.stderr,
                 )
                 return 2

@@ -21,21 +21,28 @@ run() { # run <描述> <命令...>
   return $code
 }
 
-# 按项目类型探测考题运行方式（找到第一个匹配即用）
-if [ -f package.json ] && grep -q '"test"' package.json; then
+# 按项目类型探测考题运行方式（显式入口优先，找到第一个匹配即用）
+if [ -f tests/run.sh ]; then
+  run "tests/run.sh" bash tests/run.sh; exit $?
+elif [ -f package.json ] && grep -q '"test"' package.json; then
   run "npm test" npm test --silent; exit $?
 elif [ -d tests ] && ls tests/*.py >/dev/null 2>&1; then
   if command -v pytest >/dev/null 2>&1; then
     run "pytest" pytest -q tests; exit $?
   else
-    run "python unittest" python3 -m unittest discover -s tests; exit $?
+    run "python unittest" python3 -m unittest discover -s tests
+    code=$?
+    # fail closed：discover 找到 0 个测试时 unittest 也报 exit 0，这是假绿
+    if [ $code -eq 0 ] && grep -q "Ran 0 tests" "$LOG"; then
+      echo "[verify] ⚠️ unittest 发现 0 个测试（假绿），按不通过处理。"
+      exit 3
+    fi
+    exit $code
   fi
 elif [ -f go.mod ]; then
   run "go test" go test ./...; exit $?
 elif [ -f Cargo.toml ]; then
   run "cargo test" cargo test --quiet; exit $?
-elif [ -f tests/run.sh ]; then
-  run "tests/run.sh" bash tests/run.sh; exit $?
 fi
 
 echo "[verify] ⚠️ 未找到考题运行方式（fail closed，按不通过处理）。" | tee -a "$LOG"

@@ -3,6 +3,7 @@
 #   骨架 + git + 状态文件 + 围栏进驻 + 钩子接线 + .gitignore
 # 用法: init_project.sh <项目目录> [项目名]
 set -eu
+: "${LANG:=en_US.UTF-8}"; export LANG   # 老 bash + 空 locale 下 CJK 解析兜底
 PROJ="${1:?用法: init_project.sh <项目目录> [项目名]}"
 NAME="${2:-$(basename "$PROJ")}"
 SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -87,4 +88,4 @@ if ! git rev-parse HEAD >/dev/null 2>&1; then
   echo "[init] 首次存档完成"
 fi
 
-echo "[init] ✅ 「$NAME」建家完成：git + 状态机 + 围栏 + 日志/问题本 + .gitignore"
+echo "[init] ✅ 「${NAME}」建家完成：git + 状态机 + 围栏 + 日志/问题本 + .gitignore"
