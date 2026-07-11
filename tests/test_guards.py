@@ -85,6 +85,17 @@ def main():
         with open(os.path.join(S, "tasks.md"), "w", encoding="utf-8") as f:
             f.write("- [x] T01 a\n- [x] T02 b\n")
         check("D5 批空放行+摘 flag", hook("stop_batch.py", {}) == 0 and not os.path.exists(flag))
+        # —— 对账与相位复位（实测②④发现）——
+        setp("phase", "implementing")
+        subprocess.run(["python3", os.path.join(H, "progress.py"), "bump-cycle"],
+                       capture_output=True, env=env, cwd=S)
+        st_now = json.load(open(os.path.join(S, ".loopwork", "state.json"), encoding="utf-8"))
+        check("H1 bump-cycle 复位 phase", st_now.get("phase") == "test-writing")
+        with open(os.path.join(S, "tasks.md"), "w", encoding="utf-8") as f:
+            f.write("- [x] T01 a\n- [x] T02 b\n- [ ] T03 c\n")
+        p = subprocess.run(["python3", os.path.join(H, "progress.py"), "card"],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, cwd=S)
+        check("H2 进度卡对账警告（勾选>存档）", "对账警告" in p.stdout)
         # —— frontmatter 包装器（P0-2 回归）——
         w = 'G="$CLAUDE_PROJECT_DIR/.loopwork/hooks/guard_edits.py"; if [ -f "$G" ]; then python3 "$G"; fi'
         p = subprocess.run(["bash", "-c", w], input="{}", capture_output=True, text=True, encoding="utf-8", errors="replace",

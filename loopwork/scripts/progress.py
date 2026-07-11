@@ -9,7 +9,7 @@
   progress.py bump-cycle          # 外循环圈数 +1，round 归零
   progress.py milestone <name>    # 记录里程碑（幂等，返回 new/dup）
 """
-import json, os, sys, datetime
+import json, os, subprocess, sys, datetime
 
 STAGE_NAMES = {
     "0": "Stage 0 开场体检", "1": "Stage 1 想法访谈", "2": "Stage 2 规格与规矩",
@@ -61,6 +61,16 @@ def count_tasks():
         pass
     return done, total
 
+def count_archive_commits():
+    """数 git 历史里「存档: T…」的次数——勾选不是证据，存档才是。无 git 时返回 None。"""
+    try:
+        out = subprocess.check_output(["git", "-C", root(), "log", "--pretty=%s"],
+                                      stderr=subprocess.DEVNULL)
+        return sum(1 for l in out.decode("utf-8", "replace").splitlines()
+                   if l.startswith("存档: T"))
+    except Exception:
+        return None
+
 def count_blocked():
     p = os.path.join(root(), "BLOCKED.md")
     n = 0
@@ -84,6 +94,12 @@ def card():
         f"任务：{done}/{total} 完成" + (f"；问题本 {blocked} 件待拍板" if blocked else ""),
         f"下一步：{NEXT_HINT.get(stage, '读 references 对应剧本')}",
     ]
+    commits = count_archive_commits()
+    if done > 0 and commits is not None and done > commits:
+        lines.append(
+            f"⚠️ 对账警告：{done} 项打勾但只有 {commits} 次任务存档——勾选没有证据支撑，"
+            "续接前先核实（git log / verify.sh），别在假地基上盖楼。"
+        )
     print("\n".join(lines))
     return 0
 
@@ -115,7 +131,14 @@ def main(argv):
     elif cmd == "bump-cycle":
         st["cycle"] = int(st.get("cycle", 1)) + 1
         st["round_count"] = 0
-        save(st); print(st["cycle"])
+        st["phase"] = "test-writing"  # 换圈复位相位：防上一圈中断在实现期导致围栏误锁下一圈
+        save(st)
+        try:
+            with open(os.path.join(root(), "JOURNAL.md"), "a", encoding="utf-8") as jf:
+                jf.write(f"- [audit] phase → test-writing (bump-cycle) @ {st['last_session']}\n")
+        except Exception:
+            pass
+        print(st["cycle"])
     elif cmd == "milestone":
         ms = st.setdefault("milestones", [])
         if argv[2] in ms:
