@@ -96,6 +96,10 @@ def main():
         p = subprocess.run(["python3", os.path.join(H, "progress.py"), "card"],
                            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, cwd=S)
         check("H2 进度卡对账警告（勾选>存档）", "对账警告" in p.stdout)
+        subprocess.run(["git", "commit", "-qm", "存档: T01 假完成", "--allow-empty"], capture_output=True, env=env, cwd=S)
+        p = subprocess.run(["python3", os.path.join(H, "progress.py"), "card"],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, cwd=S)
+        check("H3 空存档假完成被点破", "空提交" in p.stdout)
         # —— frontmatter 包装器（P0-2 回归）——
         w = 'G="$CLAUDE_PROJECT_DIR/.loopwork/hooks/guard_edits.py"; if [ -f "$G" ]; then python3 "$G"; fi'
         p = subprocess.run(["bash", "-c", w], input="{}", capture_output=True, text=True, encoding="utf-8", errors="replace",
