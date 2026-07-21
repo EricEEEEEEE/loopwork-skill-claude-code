@@ -1,8 +1,10 @@
-# Loopwork Skill
+# Loopwork Skill · Claude Code Edition
 
 ![status](https://img.shields.io/badge/status-beta-orange) ![license](https://img.shields.io/badge/license-MIT-blue) ![claude-code](https://img.shields.io/badge/Claude_Code-%E2%89%A5_2.1.196-8A2BE2) ![lang](https://img.shields.io/badge/%E4%B8%AD%E6%96%87-first-red)
 
 **A drop-in Claude Code skill that turns a complete beginner's idea into working, continuously-evolving software — through a guided loop workflow.**
+
+> 🟢 **OpenAI Codex 用户**：请用姊妹版 [loopwork-skill-codex](https://github.com/EricEEEEEEE/loopwork-skill-codex)。两版方法论同源，围栏按各自平台原生机制实现。
 
 一个拖进 Claude Code 就能用的引导型 skill：不会编程的人说出一个想法，它以向导身份带他走完「访谈 → 白话规格 → 批准计划 → 自主循环开发 → 亲手验收」的全过程，然后把项目装进永续循环——**你出方向，AI 跑圈，项目不是做完的，是转起来的。**
 
@@ -19,7 +21,7 @@
 
 ## 🇨🇳 中文快速上手（3 分钟）
 
-**第 1 步 · 下载**：点本页绿色 **Code** 按钮 → **Download ZIP** → 解压。（会用 git 的话：`git clone https://github.com/EricEEEEEEE/loopwork-skill.git`）
+**第 1 步 · 下载**：点本页绿色 **Code** 按钮 → **Download ZIP** → 解压。（会用 git 的话：`git clone https://github.com/EricEEEEEEE/loopwork-skill-claude-code.git`）
 
 **第 2 步 · 安装**：把解压出来的 **`loopwork` 文件夹**（注意是里面那个 loopwork 文件夹，不是整个仓库）放进：
 
@@ -29,7 +31,7 @@
 没有 `skills` 文件夹就自己新建一个。命令行党一步到位：
 
 ```bash
-git clone https://github.com/EricEEEEEEE/loopwork-skill.git /tmp/lw && mkdir -p ~/.claude/skills && cp -R /tmp/lw/loopwork ~/.claude/skills/
+git clone https://github.com/EricEEEEEEE/loopwork-skill-claude-code.git /tmp/lw && mkdir -p ~/.claude/skills && cp -R /tmp/lw/loopwork ~/.claude/skills/
 ```
 
 **第 3 步 · 开口**：打开 Claude Code（新会话），直接说你的想法：
@@ -113,7 +115,7 @@ Industry lesson (68 documented failure cases): text rules get read, "understood"
 ## Roadmap
 
 - v1.x — real-beginner feedback, scheduled ignition (闹钟档), English-first pass
-- v2 — Codex edition (different hook & instruction system, separate build)
+- v2 — Codex edition: **shipped** → [loopwork-skill-codex](https://github.com/EricEEEEEEE/loopwork-skill-codex)
 
 ## License
 
