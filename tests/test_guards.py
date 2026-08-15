@@ -31,6 +31,11 @@ def main():
                                capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, cwd=S)
             return p.returncode
 
+        def hook2(script, payload):
+            p = subprocess.run(["python3", os.path.join(H, script)], input=json.dumps(payload),
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, cwd=S)
+            return p.returncode, p.stderr
+
         def setp(key, val):
             subprocess.run(["python3", os.path.join(H, "progress.py"), "set", key, str(val)],
                            capture_output=True, env=env, cwd=S)
@@ -67,16 +72,22 @@ def main():
         check("C2 任意 phase 围栏自保", hook("guard_bash.py", ba("sed -i x .loopwork/state.json")) == 2)
         journal = open(os.path.join(S, "JOURNAL.md"), encoding="utf-8").read()
         check("C3 phase 翻转有审计留痕", "[audit] phase → test-writing" in journal)
-        # —— stop_batch：批次外部计数 ——
+        # —— stop_batch：批次外部计数 + 防打转 + 顶回安全上限 ——
         with open(os.path.join(S, "tasks.md"), "w", encoding="utf-8") as f:
             f.write("- [ ] T01 a\n- [ ] T02 b\n- [ ] T03 c\n")
         flag = os.path.join(S, ".loopwork", "batch.flag")
         open(flag, "w").close()
         setp("round_count", 0); setp("batch_size", 2)
         check("D1 批中顶回", hook("stop_batch.py", {}) == 2)
-        check("D2 flag 记录批次起点", open(flag).read().strip() == "0")
+        check("D2 flag 记起点+顶回计数", open(flag).read().strip() == "0,0,0,1")
+        rc, err = hook2("stop_batch.py", {})
+        check("D2b 无进展第 1 次仅警告", rc == 2 and "没涨" in err and open(flag).read().strip() == "0,0,1,2")
+        rc, err = hook2("stop_batch.py", {})
+        check("D2c 连续 2 次无进展自动停批", rc == 2 and "打转" in err and not os.path.exists(flag))
+        with open(flag, "w", encoding="utf-8") as f:
+            f.write("0")  # 旧版 flag 格式（纯数字 = 起点）
         setp("round_count", 2)
-        check("D3 满批强制去验收", hook("stop_batch.py", {}) == 2 and not os.path.exists(flag))
+        check("D3 满批强制去验收（兼容旧 flag）", hook("stop_batch.py", {}) == 2 and not os.path.exists(flag))
         open(flag, "w").close()
         with open(os.path.join(S, "tasks.md"), "w", encoding="utf-8") as f:
             f.write("- [ ] T01 a 〔卡·B01〕\n- [x] T02 b\n")
@@ -85,6 +96,13 @@ def main():
         with open(os.path.join(S, "tasks.md"), "w", encoding="utf-8") as f:
             f.write("- [x] T01 a\n- [x] T02 b\n")
         check("D5 批空放行+摘 flag", hook("stop_batch.py", {}) == 0 and not os.path.exists(flag))
+        with open(os.path.join(S, "tasks.md"), "w", encoding="utf-8") as f:
+            f.write("- [ ] T01 a\n- [ ] T02 b\n- [ ] T03 c\n")
+        with open(flag, "w", encoding="utf-8") as f:
+            f.write("0,0,0,6")  # 本批已顶回 6 次
+        setp("round_count", 1)
+        rc, err = hook2("stop_batch.py", {})
+        check("D6 顶回达安全上限优雅停批", rc == 2 and "安全上限" in err and not os.path.exists(flag))
         # —— 对账与相位复位（实测②④发现）——
         setp("phase", "implementing")
         subprocess.run(["python3", os.path.join(H, "progress.py"), "bump-cycle"],
