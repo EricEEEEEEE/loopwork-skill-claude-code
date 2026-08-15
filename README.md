@@ -91,6 +91,7 @@ loopwork/
 │   ├── progress.py       #   状态机 + 进度卡（SessionStart 自动播报）
 │   ├── guard_edits.py    #   围栏：实现期锁死考题/规格/规矩
 │   ├── guard_bash.py     #   围栏：拦 rm -rf / force push / shell 绕道改写
+│   ├── guard_ask.py      #   围栏：挂机批内拦弹窗提问（该写 BLOCKED.md 跳过）
 │   └── stop_batch.py     #   挂机档：Stop 钩子自动续轮（外部计数器）
 └── agents/reviewer.md    # 只读判卷员（验收前预检，N 对 M 点名）
 ```
@@ -107,7 +108,7 @@ Industry lesson (68 documented failure cases): text rules get read, "understood"
 
 ## Status
 
-**v1 built; guard machinery fully regression-tested (36-case suite in [tests/](tests/), run `bash loopwork/scripts/verify.sh` in this repo); live cold-start scenarios simulated, real-beginner field test pending.** Release gates in [PROJECT.md](PROJECT.md) §9. Until a real beginner completes a voyage + one solo cycle, treat this as beta.
+**v1 built; guard machinery fully regression-tested (67-case suite in [tests/](tests/), run `python3 tests/test_guards.py` in this repo); live cold-start scenarios simulated, real-beginner field test pending.** Release gates in [PROJECT.md](PROJECT.md) §9. Until a real beginner completes a voyage + one solo cycle, treat this as beta.
 
 - Design doc: [PROJECT.md](PROJECT.md)（含完整用户旅程、五道锁、设计依据）
 - Ecosystem research: [docs/research/](docs/research/)（官方规范 / spec-driven 框架 / 循环纪律 / 小白引导，4 份调研）

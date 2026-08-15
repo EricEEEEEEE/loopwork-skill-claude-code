@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Loopwork 围栏与状态机回归套件（本仓库的考题）。
 
-在临时目录里用 init_project.sh 建一个沙盒项目，对四台机器
-（guard_edits / guard_bash / stop_batch / progress）喂伪造载荷，验证拦截/放行/顶回行为。
+在临时目录里用 init_project.sh 建一个沙盒项目，对五台机器
+（guard_edits / guard_bash / guard_ask / stop_batch / progress）喂伪造载荷，验证拦截/放行/顶回行为。
 exit 0 = 全绿。
 """
 import json, os, shutil, subprocess, sys, tempfile
@@ -80,6 +80,9 @@ def main():
         check("B18 restore 回滚考题被拦", hook("guard_bash.py", ba("git restore --source=HEAD~1 tests/")) == 2)
         check("B19 git apply 盲区被拦", hook("guard_bash.py", ba("git apply fix.patch")) == 2)
         check("B20 checkout 开分支放行", hook("guard_bash.py", ba("git checkout -b feature")) == 0)
+        check("B21 cp 从考题拷出放行（只有目的地算写）", hook("guard_bash.py", ba("cp tests/golden.json /tmp/out.json")) == 0)
+        check("B22 cp 带旗标覆盖考题被拦", hook("guard_bash.py", ba("cp -f hack2.py tests/golden.json")) == 2)
+        check("B23 mv 搬走考题被拦（源文件会消失）", hook("guard_bash.py", ba("mv tests/exam.py /tmp/")) == 2)
         # —— phase 语义 ——
         setp("phase", "test-writing")
         check("C1 test-writing 改考题放行", hook("guard_edits.py", ed("tests/foo.py")) == 0)
@@ -159,12 +162,77 @@ def main():
         v = subprocess.run(["bash", os.path.join(H, "verify.sh")], capture_output=True,
                            env={**env, "LOOPWORK_VERIFY_TIMEOUT": "2"}, cwd=S)
         check("F2 考题挂住被超时保险击杀 (exit 124)", v.returncode == 124)
+        # F5 日志修剪：塞 25 份旧日志，跑一轮后只留最近 20 份
+        logdir = os.path.join(S, ".loopwork", "logs")
+        for i in range(25):
+            old = os.path.join(logdir, f"verify-dummy-{i:03d}.log")
+            with open(old, "w") as f:
+                f.write("x\n")
+            os.utime(old, (1600000000 + i, 1600000000 + i))
+        with open(os.path.join(S, "tests", "run.sh"), "w", encoding="utf-8") as f:
+            f.write("exit 0\n")
+        subprocess.run(["bash", os.path.join(H, "verify.sh")], capture_output=True, env=env, cwd=S)
+        nlogs = len([x for x in os.listdir(logdir) if x.startswith("verify-") and x.endswith(".log")])
+        check("F5 verify 日志只留最近 20 份", nlogs == 20, f"实际 {nlogs}")
+        # F3/F4 多栈裁判：没有 tests/run.sh 时探测到的栈全都要跑（假 npm shim，考题不依赖本机 npm）
+        os.remove(os.path.join(S, "tests", "run.sh"))
+        shim = os.path.join(S, "shim")
+        os.makedirs(shim, exist_ok=True)
+        with open(os.path.join(shim, "npm"), "w") as f:
+            f.write('#!/bin/sh\nexit "$(cat .npm_exit 2>/dev/null || echo 0)"\n')
+        os.chmod(os.path.join(shim, "npm"), 0o755)
+        envF = {**env, "PATH": shim + os.pathsep + env["PATH"]}
+        with open(os.path.join(S, "package.json"), "w", encoding="utf-8") as f:
+            f.write('{"name": "x", "version": "1.0.0", "scripts": {"test": "exit 0"}}\n')
+        with open(os.path.join(S, "tests", "test_ok.py"), "w", encoding="utf-8") as f:
+            f.write("import unittest\nclass TestOK(unittest.TestCase):\n    def test_ok(self):\n        self.assertTrue(True)\n")
+        with open(os.path.join(S, ".npm_exit"), "w") as f:
+            f.write("0\n")
+        v = subprocess.run(["bash", os.path.join(H, "verify.sh")], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", env=envF, cwd=S)
+        check("F3 多栈全绿 exit 0", v.returncode == 0 and "2 个测试栈" in v.stdout, f"rc={v.returncode}")
+        with open(os.path.join(S, ".npm_exit"), "w") as f:
+            f.write("1\n")
+        v = subprocess.run(["bash", os.path.join(H, "verify.sh")], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", env=envF, cwd=S)
+        check("F4 多栈一红全局红", v.returncode == 1, f"rc={v.returncode}")
+        os.remove(os.path.join(S, "package.json"))
         shutil.rmtree(os.path.join(S, "tests"), ignore_errors=True)
         v = subprocess.run(["bash", os.path.join(H, "verify.sh")], capture_output=True, env=env, cwd=S)
         check("F1 无考题 fail-closed(exit 3)", v.returncode == 3)
         # —— init 幂等 ——
         r2 = subprocess.run(["bash", INIT, S, "沙盒项目"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
         check("G1 init 重复跑安全", r2.returncode == 0)
+        # N1 旧接线升级：过期签名的自家钩子被清、用户钩子保留、新接线只有一条
+        sp = os.path.join(S, ".claude", "settings.json")
+        cfg = json.load(open(sp, encoding="utf-8"))
+        cfg["hooks"]["PreToolUse"] = [
+            {"matcher": "Edit|Write|MultiEdit",
+             "hooks": [{"type": "command", "command": 'python3 "$CLAUDE_PROJECT_DIR/.loopwork/hooks/guard_edits.py"'}]},
+            {"matcher": "Bash", "hooks": [{"type": "command", "command": "echo user-custom"}]},
+        ]
+        with open(sp, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+        subprocess.run(["bash", INIT, S, "沙盒项目"], capture_output=True, env=env)
+        pre = json.load(open(sp, encoding="utf-8"))["hooks"]["PreToolUse"]
+        old_gone = not any(e.get("matcher") == "Edit|Write|MultiEdit" for e in pre)
+        new_once = sum(1 for e in pre if e.get("matcher") == "Edit|Write|MultiEdit|NotebookEdit") == 1
+        user_kept = any("user-custom" in json.dumps(e) for e in pre)
+        check("N1 旧接线升级去重+用户钩子保留", old_gone and new_once and user_kept)
+        # N2 首次存档密钥筛查：疑似密钥文件不入库、不删盘（独立沙盒走首次提交路径）
+        S2 = tempfile.mkdtemp(prefix="loopwork-sec-")
+        try:
+            with open(os.path.join(S2, "fake.pem"), "w") as f:
+                f.write("PRIVATE KEY\n")
+            with open(os.path.join(S2, "notes.txt"), "w") as f:
+                f.write("hello\n")
+            subprocess.run(["bash", INIT, S2, "密钥沙盒"], capture_output=True, env=env)
+            ls = subprocess.run(["git", "ls-files"], capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", cwd=S2).stdout
+            check("N2 首次存档剔除疑似密钥（盘上保留）",
+                  "fake.pem" not in ls and "notes.txt" in ls and os.path.exists(os.path.join(S2, "fake.pem")))
+        finally:
+            shutil.rmtree(S2, ignore_errors=True)
     finally:
         shutil.rmtree(S, ignore_errors=True)
 

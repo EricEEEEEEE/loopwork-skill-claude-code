@@ -41,14 +41,24 @@ def write_target_hit(cmd, targets):
         for t in targets:
             if t in tok:
                 return t
-    # 2) 写型命令的参数区：按管道/分号切段，段内 sed -i / tee / mv / cp / truncate 之后的参数
+    # 2) 写型命令的参数区：按管道/分号切段。sed -i/tee/truncate 对每个文件参数都是写；
+    #    mv 也算——把考题搬走等于删掉源文件。
     for seg in re.split(r"[;|&]+", cmd):
-        m = re.search(r"\b(sed\s+-i\S*|tee(?:\s+-a)?|mv|cp|truncate)\b(.*)", seg)
+        m = re.search(r"\b(sed\s+-i\S*|tee(?:\s+-a)?|mv|truncate)\b(.*)", seg)
         if m:
             args = m.group(2).lower()
             for t in targets:
                 if t in args:
                     return t
+        # cp 只有目的地（最后一个参数）算写：从考题目录拷出去是读，必须放行
+        m = re.search(r"\bcp\b(.*)", seg)
+        if m:
+            toks = [x for x in m.group(1).lower().split() if not x.startswith("-")]
+            if toks:
+                dest = toks[-1]
+                for t in targets:
+                    if t in dest:
+                        return t
     return None
 
 
