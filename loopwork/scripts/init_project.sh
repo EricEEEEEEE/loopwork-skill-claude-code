@@ -15,7 +15,7 @@ cd "$PROJ"
 if [ ! -d .git ]; then git init -q; echo "[init] git 存档系统已开启"; fi
 
 # 2. 围栏与工具进驻（围栏脚本以标准库为准，覆盖更新）
-for f in guard_edits.py guard_bash.py stop_batch.py progress.py verify.sh; do
+for f in guard_edits.py guard_bash.py guard_ask.py stop_batch.py progress.py verify.sh; do
   cp -f "$SKILL_DIR/scripts/$f" ".loopwork/hooks/$f"
 done
 chmod +x .loopwork/hooks/*.sh .loopwork/hooks/*.py 2>/dev/null || true
@@ -57,8 +57,9 @@ hooks = cfg.setdefault("hooks", {})
 def cmd(c): return {"type": "command", "command": c}
 WANT = {
     "PreToolUse": [
-        {"matcher": "Edit|Write|MultiEdit", "hooks": [cmd('python3 "$CLAUDE_PROJECT_DIR/.loopwork/hooks/guard_edits.py"')]},
+        {"matcher": "Edit|Write|MultiEdit|NotebookEdit", "hooks": [cmd('python3 "$CLAUDE_PROJECT_DIR/.loopwork/hooks/guard_edits.py"')]},
         {"matcher": "Bash", "hooks": [cmd('python3 "$CLAUDE_PROJECT_DIR/.loopwork/hooks/guard_bash.py"')]},
+        {"matcher": "AskUserQuestion", "hooks": [cmd('python3 "$CLAUDE_PROJECT_DIR/.loopwork/hooks/guard_ask.py"')]},
     ],
     "Stop": [{"hooks": [cmd('python3 "$CLAUDE_PROJECT_DIR/.loopwork/hooks/stop_batch.py"')]}],
     "SessionStart": [{"hooks": [cmd('python3 "$CLAUDE_PROJECT_DIR/.loopwork/hooks/progress.py" card')]}],

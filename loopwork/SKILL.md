@@ -4,7 +4,7 @@ description: Guides complete beginners from a raw idea to working, continuously-
 argument-hint: "[你的想法，或：继续 / 加功能 / 我在哪]"
 hooks:
   PreToolUse:
-    - matcher: "Edit|Write|MultiEdit"
+    - matcher: "Edit|Write|MultiEdit|NotebookEdit"
       hooks:
         - type: command
           command: "G=\"$CLAUDE_PROJECT_DIR/.loopwork/hooks/guard_edits.py\"; if [ -f \"$G\" ]; then python3 \"$G\"; fi"
@@ -12,6 +12,10 @@ hooks:
       hooks:
         - type: command
           command: "G=\"$CLAUDE_PROJECT_DIR/.loopwork/hooks/guard_bash.py\"; if [ -f \"$G\" ]; then python3 \"$G\"; fi"
+    - matcher: "AskUserQuestion"
+      hooks:
+        - type: command
+          command: "G=\"$CLAUDE_PROJECT_DIR/.loopwork/hooks/guard_ask.py\"; if [ -f \"$G\" ]; then python3 \"$G\"; fi"
 ---
 
 # Loopwork · 循环工作法向导
@@ -80,12 +84,13 @@ Stage 4↔5 往复，直到 tasks.md 清空 → Stage 6 → **进环仪式** →
 7. 连续 2 条任务受阻或 `round_count` 达上限（默认 20）→ 停，汇总汇报；正常做满一批（默认 5 条）或撞到「用户可感知里程碑」→ 进验收。
 8. 同一任务失败 3 次 → 停止重试，转诊断模式（读日志→找根因→修环境→只再试一次），仍败 → BLOCKED.md。
 
-**挂机批模式**（用户同意后）：`touch .loopwork/batch.flag` → Stop 钩子会在这批没跑完时把你顶回去继续；批完或用户喊停（`rm` 该 flag）即恢复正常。batch_size 别设超过 6：平台对连续顶回有硬上限（8 次），围栏会在第 7 次顶回时自动安全停批，批太大会被提前截断。教学话术见 loop-mode.md（也可教用户用原生 `/goal`）。
+**挂机批模式**（用户同意后）：`touch .loopwork/batch.flag` → Stop 钩子会在这批没跑完时把你顶回去继续；批完或用户喊停（`rm` 该 flag）即恢复正常。batch_size 别设超过 6：平台对连续顶回有硬上限（8 次），围栏会在第 7 次顶回时自动安全停批，批太大会被提前截断。挂机期间要拍板的事一律写 BLOCKED.md（提问围栏会拦弹窗——用户不在场，弹了就挂死）。教学话术见 loop-mode.md（也可教用户用原生 `/goal`）。
 
 ## ⑤ 安全与纪律硬件（你被这些机器看着，这是好事）
 
-- `guard_edits.py`：implementing 阶段改考题/规格/规矩 → 物理拦截；
-- `guard_bash.py`：用 `sed/echo >/tee` 绕道改保护文件、`rm -rf`、`git push --force` → 物理拦截；
+- `guard_edits.py`：implementing 阶段改考题/规格/规矩 → 物理拦截（含 NotebookEdit、符号链接、大小写变体）；
+- `guard_bash.py`：用 `sed/echo >/tee` 绕道改保护文件、`rm -rf`（长短旗标）、`git push --force/-f/+refspec`、实现期 `git checkout/restore/apply/revert` 回滚考题 → 物理拦截；
+- `guard_ask.py`：挂机批期间弹提问 → 拦下改写 BLOCKED.md（用户不在场，不挂死等待）；
 - `verify.sh`：验收唯一裁判，解析失败一律算不通过（fail closed）；
 - `progress.py` + SessionStart 钩子：每次新会话自动播报进度卡；
 - 被拦截时：不要绕，向用户解释围栏拦了什么、为什么，问怎么处理。

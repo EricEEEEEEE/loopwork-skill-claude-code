@@ -22,7 +22,7 @@ def main():
         r = subprocess.run(["bash", INIT, S, "沙盒项目"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
         check("init 建家成功", r.returncode == 0, r.stderr[-200:])
         H = os.path.join(S, ".loopwork", "hooks")
-        for f in ("guard_edits.py", "guard_bash.py", "stop_batch.py", "progress.py", "verify.sh"):
+        for f in ("guard_edits.py", "guard_bash.py", "guard_ask.py", "stop_batch.py", "progress.py", "verify.sh"):
             check(f"围栏进驻 {f}", os.path.exists(os.path.join(H, f)))
         check("钩子接线 settings.json", os.path.exists(os.path.join(S, ".claude", "settings.json")))
 
@@ -52,6 +52,11 @@ def main():
         check("A3 直接改 state 被拦", hook("guard_edits.py", ed(".loopwork/state.json")) == 2)
         check("A4 改普通文件放行", hook("guard_edits.py", ed("src/app.js")) == 0)
         check("A5 越界项目外被拦", hook("guard_edits.py", ed("/etc/hosts")) == 2)
+        nb = lambda fp: {"tool_name": "NotebookEdit", "tool_input": {"notebook_path": fp}, "cwd": S}
+        check("A6 NotebookEdit 改考题被拦", hook("guard_edits.py", nb("tests/nb.ipynb")) == 2)
+        check("A7 大小写变体改考题被拦", hook("guard_edits.py", ed("TESTS/foo.py")) == 2)
+        os.symlink("tests", os.path.join(S, "tlink"))
+        check("A8 符号链接绕道被拦", hook("guard_edits.py", ed("tlink/foo.py")) == 2)
         # —— guard_bash：剧本规定动作必须放行 ——
         check("B1 跑考题+管道放行", hook("guard_bash.py", ba("pytest tests/ -q 2>&1 | tail -20")) == 0)
         check("B2 跑考题+重定向放行", hook("guard_bash.py", ba("pytest tests/ > out.log 2>&1")) == 0)
@@ -66,12 +71,22 @@ def main():
         check("B10 危险删除(分写)被拦", hook("guard_bash.py", ba(RM2)) == 2)
         check("B11 普通 rm 单文件放行", hook("guard_bash.py", ba("rm out.log")) == 0)
         check("B12 force push 被拦", hook("guard_bash.py", ba("git push --force origin main")) == 2)
+        check("B13 push -f 短旗标被拦", hook("guard_bash.py", ba("git push -f origin main")) == 2)
+        check("B14 push +refspec 被拦", hook("guard_bash.py", ba("git push origin +main")) == 2)
+        RM3 = "rm " + "--recursive " + "--force /x"
+        check("B15 危险删除(长旗标)被拦", hook("guard_bash.py", ba(RM3)) == 2)
+        check("B16 正常 push 放行", hook("guard_bash.py", ba("git push origin main")) == 0)
+        check("B17 checkout 回滚考题被拦", hook("guard_bash.py", ba("git checkout HEAD~1 -- tests/exam.py")) == 2)
+        check("B18 restore 回滚考题被拦", hook("guard_bash.py", ba("git restore --source=HEAD~1 tests/")) == 2)
+        check("B19 git apply 盲区被拦", hook("guard_bash.py", ba("git apply fix.patch")) == 2)
+        check("B20 checkout 开分支放行", hook("guard_bash.py", ba("git checkout -b feature")) == 0)
         # —— phase 语义 ——
         setp("phase", "test-writing")
         check("C1 test-writing 改考题放行", hook("guard_edits.py", ed("tests/foo.py")) == 0)
         check("C2 任意 phase 围栏自保", hook("guard_bash.py", ba("sed -i x .loopwork/state.json")) == 2)
         journal = open(os.path.join(S, "JOURNAL.md"), encoding="utf-8").read()
         check("C3 phase 翻转有审计留痕", "[audit] phase → test-writing" in journal)
+        check("C4 考题期 checkout 考题放行", hook("guard_bash.py", ba("git checkout -- tests/foo.py")) == 0)
         # —— stop_batch：批次外部计数 + 防打转 + 顶回安全上限 ——
         with open(os.path.join(S, "tasks.md"), "w", encoding="utf-8") as f:
             f.write("- [ ] T01 a\n- [ ] T02 b\n- [ ] T03 c\n")
@@ -103,6 +118,13 @@ def main():
         setp("round_count", 1)
         rc, err = hook2("stop_batch.py", {})
         check("D6 顶回达安全上限优雅停批", rc == 2 and "安全上限" in err and not os.path.exists(flag))
+        # —— guard_ask：挂机批禁提问 ——
+        ask = {"tool_name": "AskUserQuestion", "tool_input": {}, "cwd": S}
+        open(flag, "w").close()
+        rc, err = hook2("guard_ask.py", ask)
+        check("I1 挂机批弹提问被拦+指路", rc == 2 and "BLOCKED" in err)
+        os.remove(flag)
+        check("I2 非批模式提问放行", hook("guard_ask.py", ask) == 0)
         # —— 对账与相位复位（实测②④发现）——
         setp("phase", "implementing")
         subprocess.run(["python3", os.path.join(H, "progress.py"), "bump-cycle"],
@@ -127,7 +149,16 @@ def main():
         p = subprocess.run(["bash", "-c", w], input=json.dumps(ed("tests/foo.py")),
                            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, cwd=S)
         check("E2 已建家拦截穿透包装器", p.returncode == 2)
-        # —— verify fail-closed ——
+        # —— verify：绿灯 / 超时保险 / fail-closed ——
+        with open(os.path.join(S, "tests", "run.sh"), "w", encoding="utf-8") as f:
+            f.write("exit 0\n")
+        v = subprocess.run(["bash", os.path.join(H, "verify.sh")], capture_output=True, env=env, cwd=S)
+        check("F0 考题全绿 exit 0", v.returncode == 0)
+        with open(os.path.join(S, "tests", "run.sh"), "w", encoding="utf-8") as f:
+            f.write("sleep 30\n")
+        v = subprocess.run(["bash", os.path.join(H, "verify.sh")], capture_output=True,
+                           env={**env, "LOOPWORK_VERIFY_TIMEOUT": "2"}, cwd=S)
+        check("F2 考题挂住被超时保险击杀 (exit 124)", v.returncode == 124)
         shutil.rmtree(os.path.join(S, "tests"), ignore_errors=True)
         v = subprocess.run(["bash", os.path.join(H, "verify.sh")], capture_output=True, env=env, cwd=S)
         check("F1 无考题 fail-closed(exit 3)", v.returncode == 3)
