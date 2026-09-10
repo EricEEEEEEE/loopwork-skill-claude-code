@@ -15,7 +15,7 @@ cd "$PROJ"
 if [ ! -d .git ]; then git init -q; echo "[init] git 存档系统已开启"; fi
 
 # 2. 围栏与工具进驻（围栏脚本以标准库为准，覆盖更新）
-for f in guard_edits.py guard_bash.py guard_ask.py stop_batch.py audit_log.py progress.py verify.sh; do
+for f in guard_rules.py guard_log.py guard_edits.py guard_bash.py guard_ask.py stop_batch.py audit_log.py progress.py verify.sh; do
   cp -f "$SKILL_DIR/scripts/$f" ".loopwork/hooks/$f"
 done
 chmod +x .loopwork/hooks/*.sh .loopwork/hooks/*.py 2>/dev/null || true

@@ -32,7 +32,7 @@ hooks:
 1. **先读状态，再说话**：每次被激活，第一动作是找 `.loopwork/state.json`（先看当前目录，再问用户项目在哪）。没有 → 新项目，走 Stage 0；有 → 按「点火路由」（见 ②）续接。绝不凭记忆猜进度。
 2. **文件即记忆**：一切进度写在项目文件里（state.json / tasks.md / BLOCKED.md / JOURNAL.md）。你可以失忆，文件不会。感觉上下文丢失时：重读 state.json → 本文件 → 当前阶段的 `references/` 剧本。
 3. **执行自主，方向人定**：阶段方向、计划批准、以及【花钱 / 删除既有文件 / 对外发布 / 修改项目规矩 / 密钥】五类动作，无条件停下等用户明确同意，且**永不**和普通「下一步」混在一起顺手带过。
-4. **考题先红后绿**：先写测试、亲眼跑红，再写实现；实现期间绝不改考题（顺序：存档红考题 → `python3 .loopwork/hooks/progress.py set last_round_commit $(git rev-parse HEAD)` 推进基线 → `progress.py set phase implementing` 锁住考题，顺序错了检测门会把你刚存的红考题当违规顶回）。
+4. **考题先红后绿**：先写测试、亲眼跑红，再写实现；实现期间绝不改考题（顺序：存档红考题 → `python3 .loopwork/hooks/progress.py set last_round_commit $(git rev-parse HEAD)` 推进基线 → `progress.py set phase implementing` 锁住考题，顺序错了检测门会把你刚存的红考题当违规顶回）。**这条不是自觉，是闸门**：实现期的 `git commit` 只要带实现代码进去，围栏就往回翻历史找红票——上一次绿存档之后没有过「只有考题的那一档」，这次 commit 直接被拦。确实是没有考题的活（纯文档/配置），写进 `BLOCKED.md` 交用户拍板，不要绕。
 5. **验收看证据**：只认 `bash .loopwork/hooks/verify.sh` 的 exit code、能点开的页面、N 对 M 逐条点名。永不说「应该可以了」。
 6. **卡住不停机**：要用户拍板的事写进 `BLOCKED.md`（问题/背景/建议+理由），跳过做下一条，到检查点一把清算。
 7. **小白语言**：黑话首次出现必带白话比喻（词典见 `references/glossary.md`）；每次提问一次只问一个、选择题优先、推荐项排第一、永远有「不知道，你来定」的出口。

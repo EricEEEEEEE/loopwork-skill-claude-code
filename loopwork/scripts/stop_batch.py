@@ -13,12 +13,13 @@
    d. 审计账本 .loopwork/logs/audit.jsonl 只增不减：字节数变短且不是单代轮转 = 有人抹账。
       抹掉的账模型补不回来，所以只响一次（报完重置基准），不把会话钉死在死循环里。
 2. 挂机批模式（.loopwork/batch.flag 存在时）：
-   - .loopwork/batch.flag 存 "起点轮数,上次顶回轮数,无进展次数,顶回总数"
-     （兼容旧版纯数字 = 起点轮数；空 flag 首次遇到时自动写入）
+   - .loopwork/batch.flag 存 "起点轮数,上次顶回轮数,无进展次数,顶回总数,进展指纹"
+     （兼容旧版四段/纯数字 = 起点轮数；空 flag 首次遇到时自动写入）
    - 本批做满 batch_size 条 → 摘 flag 并顶回一次：去验收（不许跳过检查点）
    - 只剩受阻任务（〔卡·…〕）→ 摘 flag 并顶回一次：汇总 + 请用户清问题本
    - 轮数达 round_cap → 摘 flag，安全停机汇总
-   - 连续 MAX_STALLS 次顶回轮数没涨 → 判定原地打转，摘 flag 并要求停批汇报
+   - 连续 MAX_STALLS 次「一点进展都没有」→ 判定原地打转，摘 flag 并要求停批汇报。
+     无进展 = 轮数没涨 ∧ HEAD 没动 ∧ tasks.md 没动 ∧ BLOCKED.md 没动（见 progress_sig）
    - 还有可做任务且未满批 → 顶回继续
 
 顶回总数（MAX_BLOCKS）是检测门和批模式**共用**的一个计数：平台对连续 Stop 顶回有硬上限
@@ -32,8 +33,18 @@
 """
 import json, os, subprocess, sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import guard_log    # 拦截取证账本（两版共享）
+except Exception:
+    guard_log = None
+try:
+    import guard_rules  # 停滞判定的证据面清单（两版共享）
+except Exception:
+    guard_rules = None
+
 MAX_BLOCKS = 7  # 平台连续顶回硬上限为 8，第 7 次转优雅停机，永不触顶
-MAX_STALLS = 2  # 连续 N 次顶回轮数未涨 → 判定打转
+MAX_STALLS = 2  # 连续 N 次顶回「一点进展都没有」→ 判定打转（定义见 progress_sig）
 
 def sh(args, cwd):
     try:
@@ -42,6 +53,21 @@ def sh(args, cwd):
         return p.returncode, p.stdout.strip()
     except Exception:
         return 1, ""
+
+def progress_sig(root):
+    """本轮末的进展快照指纹：HEAD + guard_rules.PROGRESS_FILES 的内容。
+    共享库不在就返回 ""——退回「只看轮数」的老判法，宁可少停批也不误停。"""
+    if guard_rules is None:
+        return ""
+    _, head = sh(["git", "rev-parse", "HEAD"], root)
+    blobs = []
+    for name in guard_rules.PROGRESS_FILES:
+        try:
+            with open(os.path.join(root, name), "rb") as f:
+                blobs.append(f.read())
+        except OSError:
+            blobs.append(None)
+    return guard_rules.progress_sig(head, blobs)
 
 def save_state(root, st):
     """写回 state.json（原子替换）。只有钩子走这条路——模型改状态一律用 progress.py。"""
@@ -53,6 +79,32 @@ def save_state(root, st):
         os.replace(tmp, p)
     except Exception:
         pass
+
+def round_hits(root, st):
+    """本轮被实时围栏拦了几次 = 取证账本新增行数，并把水位线推到当前值。
+
+    每轮末调一次。账本轮转过（行数反而变小）就复位水位线——宁可少报，
+    也不报出负数：一个说谎的计数比没有计数更糟。"""
+    if guard_log is None:
+        return 0
+    total = guard_log.count(root)
+    try:
+        seen = int(st.get("blocks_seen", 0) or 0)
+    except (TypeError, ValueError):
+        seen = 0
+    if total < seen:
+        seen = 0
+    if total != seen:
+        st["blocks_seen"] = total
+        save_state(root, st)
+    return max(0, total - seen)
+
+def hits_note(n):
+    """挂在顶回理由末尾的一句取证。没拦过就什么都不说，别给噪音。"""
+    if not n:
+        return ""
+    return (f"\n[取证] 本轮实时围栏拦下 {n} 次动作（明细 .loopwork/logs/blocks.jsonl）。"
+            "同一面墙撞两次以上就别再找绕路了：改走合规路径，或写进 BLOCKED.md 交给用户拍板。")
 
 def protected(lines):
     """受保护文件 = 考题/规格/规矩 + 围栏自己（改围栏脚本等于把围栏关掉，任何借口都不行）。"""
@@ -160,6 +212,10 @@ def main():
         with open(state_p, encoding="utf-8") as f:
             st = json.load(f)
 
+        # 本轮取证：账本比上轮末多出几行，就是模型这一轮撞了几次墙。水位线在这里
+        # 一次推进并落盘——不能让「记没记账」取决于后面走哪个分支。
+        hits = round_hits(root, st)
+
         # 上一轮已优雅停机 → 本轮无条件放行一次，掐断平台的连续顶回计数
         try:
             carried = int(st.get("stop_blocks", 0) or 0)
@@ -192,6 +248,7 @@ def main():
         last_nag = num(1)
         stalls = num(2, 0)
         blocks = num(3, 0) if has_flag else carried
+        last_sig = parts[4] if len(parts) > 4 else ""   # 上次挂机顶回时的进展指纹
 
         def drop_flag():
             try:
@@ -200,21 +257,29 @@ def main():
                 pass
 
         def write_blocks(n):
-            """顶回记账：批模式记 flag 第 4 段，非批模式记 state.stop_blocks。"""
+            """顶回记账：批模式记 flag 第 4 段，非批模式记 state.stop_blocks。
+            第 2、5 段（上次顶回轮数、进展指纹）原样带过去——它俩是一对，
+            都是「上一次挂机顶回时的样子」，检测门的顶回不该动它们。"""
             if has_flag:
                 with open(flag, "w", encoding="utf-8") as f:
-                    f.write(f"{start},{'' if last_nag is None else last_nag},{stalls},{n}")
+                    f.write(f"{start},{'' if last_nag is None else last_nag},"
+                            f"{stalls},{n},{last_sig}")
             else:
                 st["stop_blocks"] = n
                 save_state(root, st)
+
+        def emit(msg):
+            """所有顶回的唯一出口：话尾挂上本轮取证——连撞同一面墙是「在找绕路」的信号，
+            模型自己也该看见。与 Codex 版同结构，方便两版对照排障。"""
+            print(msg + hits_note(hits), file=sys.stderr)
+            return 2
 
         def graceful(msg):
             """优雅停机：摘 flag + 记「下轮放行」，本次仍顶回一次把话说完。"""
             drop_flag()
             st["stop_blocks"] = -1
             save_state(root, st)
-            print(msg, file=sys.stderr)
-            return 2
+            return emit(msg)
 
         # ---------- 1. 检测门（永远执行，与批模式无关）----------
         reason = gate_reason(root, st)
@@ -226,8 +291,7 @@ def main():
                     "（挂机批也一并停了）。不要再试第二遍：把这件事原样告诉用户，让他决定怎么办。"
                 )
             write_blocks(blocks)
-            print(reason, file=sys.stderr)
-            return 2
+            return emit(reason)
         if not has_flag:
             if carried:  # 检测门通过 = 连续顶回的链断了，账清零
                 st["stop_blocks"] = 0
@@ -250,8 +314,7 @@ def main():
 
         def finish(msg):
             drop_flag()
-            print(msg, file=sys.stderr)
-            return 2
+            return emit(msg)
 
         if actionable <= 0 and blocked <= 0:
             drop_flag()
@@ -262,11 +325,16 @@ def main():
             return finish(f"[挂机档] 轮数达到上限 {cap}，安全停机。请汇总本批结果并请用户验收。")
         if rounds - start >= batch_size:
             return finish(f"[挂机档] 本批已做满 {batch_size} 条（外部计数）。按纪律进验收环节，不许跳过检查点。")
-        if last_nag is not None and rounds == last_nag:
+        # 无进展 = 轮数没涨 ∧ HEAD 没动 ∧ tasks.md 没动 ∧ BLOCKED.md 没动（见 progress_sig）。
+        # 只看轮数会把「一条硬任务跨两次顶回」误判成打转——红考题存了档、任务标了〔卡〕、
+        # 问题本添了一条，都是进展，不该因此停批。
+        sig = progress_sig(root)
+        if last_nag is not None and rounds == last_nag and sig == last_sig:
             stalls += 1
             if stalls >= MAX_STALLS:
                 return finish(
-                    f"[挂机档] 连续 {MAX_STALLS} 次顶回轮数都没涨（仍是第 {rounds} 轮），判定原地打转，自动停批。"
+                    f"[挂机档] 连续 {MAX_STALLS} 次顶回一点进展都没有（仍是第 {rounds} 轮，"
+                    "HEAD、tasks.md、BLOCKED.md 都没动过），判定原地打转，自动停批。"
                     "请按停批汇报格式向用户汇总：完成了什么、卡在哪、问题本新增了什么。"
                 )
         else:
@@ -278,20 +346,17 @@ def main():
                 "请按停批汇报格式向用户汇总进度；要继续挂机请用户重新开批。"
             )
         with open(flag, "w", encoding="utf-8") as f:
-            f.write(f"{start},{rounds},{stalls},{blocks}")
+            f.write(f"{start},{rounds},{stalls},{blocks},{sig}")
         if stalls > 0:
-            print(
-                f"[挂机档] 顶回后轮数没涨（仍是第 {rounds} 轮）——若卡在同一任务：按失败分级处理（3 次转诊断），"
-                "或写 BLOCKED.md 跳过取下一条。再次无进展将自动停批。",
-                file=sys.stderr,
+            return emit(
+                f"[挂机档] 顶回后轮数没涨（仍是第 {rounds} 轮），存档、tasks.md、BLOCKED.md 也都没动——"
+                "若卡在同一任务：按失败分级处理（3 次转诊断），或写 BLOCKED.md 跳过取下一条。"
+                "再次无进展将自动停批。"
             )
-        else:
-            print(
-                f"[挂机档] 批模式进行中：本批 {rounds - start}/{batch_size} 条，剩余可做任务 {actionable} 条（总轮数 {rounds}/{cap}）。"
-                "按内循环节奏继续取下一条任务。用户喊停 = 删除 .loopwork/batch.flag。",
-                file=sys.stderr,
-            )
-        return 2
+        return emit(
+            f"[挂机档] 批模式进行中：本批 {rounds - start}/{batch_size} 条，剩余可做任务 {actionable} 条（总轮数 {rounds}/{cap}）。"
+            "按内循环节奏继续取下一条任务。用户喊停 = 删除 .loopwork/batch.flag。"
+        )
     except Exception:
         return 0
 

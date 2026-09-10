@@ -1,248 +1,163 @@
 #!/usr/bin/env python3
-"""围栏 · Bash 守卫（PreToolUse: Bash）。
+"""围栏 · Bash 守卫（PreToolUse: Bash）——薄适配层。
 
-堵四个洞：
-1. 小白安全净化：rm -rf（短/长旗标、sudo 前缀一视同仁）/ git push --force|-f|+refspec /
-   chmod 777 一律拦下（改为问用户）；
-2. 改历史 / 销毁证据：amend / rebase / filter-branch / update-ref / stash / clean /
-   reflog expire / gc --prune / branch -f|-D / reset（搬指针形态）/ switch --discard-changes /
-   push --delete 一律拦下——存档只增不减，改得动的历史不算证据；
-3. 绕道写文件：Edit 被拦后用 sed -i / tee / 重定向 / mv / cp 改保护文件——同样拦（头号绕过手法）；
-4. 实现期 git 回滚考题：checkout/restore 指向保护路径、apply/revert 目标不可见——同样拦（二号绕过手法）。
-非 loopwork 项目仅执行第 1、2 类净化；内部异常放行（fail-open）。
+判定规则全部住在 guard_rules.py（两版逐字节相同的共享库）。这里只做四件事：
+解析 Claude Code 的 payload → 找项目根 → 读当前相位 → 命中就 exit 2，把白话理由喂回模型。
+
+它拦的五类（前四类的规则本体见 guard_rules.py）：
+1. 小白安全净化：rm -rf / git push --force / chmod 777；
+2. 改历史、销毁证据：amend / rebase / filter-branch / stash / clean / reset 搬指针……；
+3. 绕道写文件：sed -i / tee / 重定向 / mv / cp / rm 指向保护文件（Edit 被拦后的头号绕过手法）；
+4. 实现期用 git checkout/restore/apply/revert 回滚考题（二号绕过手法）；
+5. 存档闸（先红后绿）：实现期的 git commit 要带实现物，就必须先有一张红票——
+   见下面 red_ticket()。这一类要读 git，所以住在适配层，不进纯函数的 guard_rules.py。
+非 loopwork 项目只执行第 1、2 类；内部异常放行（fail-open，围栏自身故障不砖会话）。
 """
-import json, os, re, shlex, sys
+import json, os, re, subprocess, sys
 
-DANGEROUS = [
-    (r"\bgit\s+push\s+.*--force", "git push --force 被围栏拦下：会抹掉远端历史，必须用户亲自决定。"),
-    (r"\bgit\s+push\s+(?:\S+\s+)*-[a-zA-Z]*f\b", "git push -f 被围栏拦下：等于 --force，会抹掉远端历史，必须用户亲自决定。"),
-    (r"\bgit\s+push\s+[^;|&]*\s\+\S", "git push +refspec 被围栏拦下：加号写法等于强推，必须用户亲自决定。"),
-    (r"\bchmod\s+777\b", "chmod 777 被围栏拦下：不做全开权限。"),
-]
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import guard_rules
+except Exception:  # 共享库不在（旧项目没重跑 init）——放行但吭一声，别默默变纸老虎
+    guard_rules = None
+try:
+    import guard_log
+except Exception:  # 取证账本是加分项，不在也照拦
+    guard_log = None
 
-# 分段：换行和 ; | & 一样是命令分隔符——多行脚本是最常见的绕道写法。
-SEP = r"[;|&\n]+"
+# Claude Code 专属的接线文件：改它等于把钩子拆了。平台差异不进共享规则。
+EXTRA_PROTECTED = [".claude/settings.json", ".claude/settings.local.json"]
 
-# git 自己的全局选项（在子命令之前），带值的要连值一起跳过。
-GIT_OPT_VALUE = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path")
-RESET_MODES = ("--hard", "--soft", "--mixed", "--merge", "--keep")
-
-# 只许追加的保护文件：>> 和 tee -a 放行，覆盖/改写/删除/搬走一律拦。
-APPEND_ONLY = ["journal.md"]
+TICKET_SCAN = 30   # 往回翻多少个存档找红票：一圈红绿只隔几档，翻 30 个绰绰有余
 
 
-def append_ok(target):
-    return any(a in target for a in APPEND_ONLY)
+def sh(args, root):
+    try:
+        p = subprocess.run(args, cwd=root, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=20)
+        return p.returncode, p.stdout
+    except Exception:
+        return 1, ""
 
 
-def dangerous_rm(cmd):
-    """rm 同时带 r 和 f 旗标即危险：合写(-rf/-fr)、分写(-r -f)、长写(--recursive --force)一视同仁。
-    一段里可能有多个 rm（`rm a.txt` 后面跟真正危险的那条），逐个看，不能只看第一个。"""
-    for seg in re.split(SEP, cmd):
-        for m in re.finditer(r"\brm\b(.*)", seg):
-            args = m.group(1)
-            flags = "".join(re.findall(r"(?:^|\s)-([a-zA-Z]+)", args)).lower()
-            longs = set(re.findall(r"(?:^|\s)--([a-z-]+)", args.lower()))
-            if ("r" in flags or "recursive" in longs) and ("f" in flags or "force" in longs):
-                return True
+def will_stage(cmd):
+    """命令行自己还会往暂存区里塞什么。返回 (整个脏工作区?, 点名的路径前缀)。
+    PreToolUse 跑在 git add 之前——`git add -A && git commit` 这种连写，
+    此刻看暂存区是空的，只能从命令行本身看出它待会儿要装什么。
+    `git add tests/` 这类点名的写法只算那几个落点，不能一律当成「全都要」。"""
+    wide, paths = False, []
+    for sub, args in guard_rules.git_calls(cmd):
+        if sub == "add":
+            named = [a for a in args if not a.startswith("-")]
+            if not named or any(p in (".", "./", "*", ":/") for p in named):
+                wide = True
+            else:
+                paths += named
+        elif sub == "commit":
+            for a in args:
+                if a == "--all" or re.fullmatch(r"-[a-zA-Z]*a[a-zA-Z]*", a):
+                    wide = True
+    return wide, paths
+
+
+def dirty_files(root):
+    """工作区里所有还没存档的路径（仓库根相对）。读不出来返回 []。
+    -z：文件名里有空格/引号时 porcelain 的引号转义会把路径读歪。
+    -uall：默认会把整个未跟踪目录折成一行 `src/`，里头的文件就看不见了。"""
+    code, out = sh(["git", "status", "--porcelain", "-z", "-uall"], root)
+    if code != 0:
+        return []
+    items, i, files = [x for x in out.split("\0") if x], 0, []
+    while i < len(items):
+        it = items[i]
+        i += 1
+        if len(it) < 4:
+            continue
+        files.append(it[3:])
+        if it[0] in ("R", "C") and i < len(items):  # 改名/复制：原路径在下一段
+            files.append(items[i])
+            i += 1
+    return files
+
+
+def commit_payload(root, cmd):
+    """这次 git commit 会带上哪些文件（仓库根相对）。读不出来返回 []（读不出就不判）。"""
+    code, out = sh(["git", "diff", "--cached", "--name-only", "-z"], root)
+    files = [x for x in out.split("\0") if x] if code == 0 else []
+    wide, paths = will_stage(cmd)
+    if wide or paths:
+        dirty = dirty_files(root)
+        files += dirty if wide else [
+            f for f in dirty
+            if any(f == p or f.startswith(p.rstrip("/") + "/") for p in paths)]
+    return sorted(set(files))
+
+
+def red_ticket(root):
+    """手里有没有红票：从 HEAD 往回翻，在撞上「上一次带实现物的存档」之前，
+    是否存在一档只有考题（+台账）的存档。有 = 这一轮先红过了，绿存档可以落。
+    不存钩子里的开关，直接读历史：PreToolUse 看不见 commit 到底成没成，
+    存出来的开关会被一次故意失败的 commit 白白骗走一张票；历史骗不了。"""
+    code, out = sh(["git", "log", "-n", str(TICKET_SCAN), "--format=%x00", "--name-only"], root)
+    if code != 0:
+        return True          # 历史读不出来就不拦（fail-open，围栏故障不砖会话）
+    for chunk in out.split("\0")[1:]:
+        files = [ln for ln in chunk.splitlines() if ln.strip()]
+        if not files:
+            continue         # 空档/合并档：什么都不说明，继续往回翻
+        if guard_rules.impl_files(files):
+            return False     # 撞上上一次绿存档了，中间没红过
+        if any(f.startswith("tests/") for f in files):
+            return True      # 只有考题的一档 —— 红票在手
     return False
 
 
-def git_calls(cmd):
-    """把命令里每一处 git 调用拆成 (子命令, 参数列表)。
-    只认「跳过 git 全局选项后的第一个词」这个位置当子命令——这样
-    `git commit -m "clean up rebase"` 不会被提交信息里的词误伤。
-    用 shlex 分词，引号里的内容整体成一个 token，旗标比对走精确相等。"""
-    out = []
-    for seg in re.split(SEP, cmd):
-        try:
-            toks = shlex.split(seg)
-        except ValueError:  # 引号不成对，退回粗分词，宁可多看几个词
-            toks = seg.split()
-        for i, t in enumerate(toks):
-            if t != "git" and not t.endswith("/git"):
-                continue
-            j = i + 1
-            while j < len(toks):
-                if toks[j] in GIT_OPT_VALUE:
-                    j += 2
-                elif toks[j].startswith("-"):
-                    j += 1
-                else:
-                    break
-            if j < len(toks):
-                out.append((toks[j].lower(), toks[j + 1:]))
-            break  # 一段里只认第一处 git 调用（后面的词是它的参数）
-    return out
+def archive_gate(root, cmd, phase):
+    """存档闸：实现期落绿存档必须先有红票。命中返回 (rule, 白话理由)，干净返回 None。
 
+    只管实现期。Stage 0–3 与循环模式的登记档都跑在 test-writing 相位上，
+    那些档天生带规格/计划这类实现物，闸门在那里开着——先红后绿约束的是写代码的那一圈。"""
+    if phase != "implementing":
+        return None
+    if not any(sub == "commit" for sub, _ in guard_rules.git_calls(cmd)):
+        return None
+    files = commit_payload(root, cmd)
+    if not files or not guard_rules.impl_files(files):
+        return None          # 空档 / 只有考题和台账：不是绿存档，不归这道闸管
+    if red_ticket(root):
+        return None
+    return ("green-without-red",
+            "拦截：这一档要带实现代码进去，但上一次绿存档之后没有过红存档。"
+            "考题先红后绿——先写会失败的考题、亲眼跑红、单独存一档（那一档里只许有 "
+            "tests/ 和 tasks.md / JOURNAL.md / 状态文件），再回来存这一档实现。"
+            "确实是没有考题的活（纯文档/配置），把它写进 BLOCKED.md 交用户拍板，不要从这里绕。")
 
-def reset_moves_pointer(args):
-    """git reset 只放行「取消暂存」形态：git reset [HEAD] [--] <路径>。
-    带模式旗标、或第一个位置参数不是 HEAD（是某个版本号/分支）→ 就是在搬分支指针。"""
-    for a in args:
-        if a in RESET_MODES:
-            return f"{a} 会搬动分支指针并丢弃工作"
-    head = args[: args.index("--")] if "--" in args else args
-    pos = [a for a in head if not a.startswith("-")]
-    if pos and pos[0] != "HEAD":
-        return f"把分支指针搬到 {pos[0]}，中间的存档等于被抹掉"
-    return None
-
-
-def git_rewrite_ban(cmd):
-    """改历史 / 销毁证据类 git 动作。命中返回 (动作名, 白话原因)，否则 None。
-    Loopwork 的流程从不需要改历史：存档只增不减，改得动的历史不算证据。
-    （用户自己在终端做这些事不经过围栏，这里只管住模型。）"""
-    for sub, args in git_calls(cmd):
-        flags = [a for a in args if a.startswith("-")]
-        if sub == "commit" and "--amend" in flags:
-            return ("git commit --amend", "改写已有存档 = 抹掉证据。要修正就再存一档，旧的留着")
-        if sub in ("rebase", "filter-branch", "filter-repo", "update-ref"):
-            return (f"git {sub}", "会重排或伪造 git 历史——基线存档一旦凭空消失，检测门会判定假历史并停机")
-        if sub == "stash":
-            return ("git stash", "把改动藏进一个不在存档里的暗格；存档才是证据，藏起来的不算")
-        if sub == "clean":
-            return ("git clean", "批量删除未跟踪文件，删掉的东西 git 里也找不回来——要删就点名删单个文件")
-        if sub == "reflog" and any(a in ("expire", "delete") for a in args):
-            return ("git reflog expire/delete", "销毁最后一层找回历史的后路")
-        if sub == "gc" and any(a.startswith("--prune") for a in flags):
-            return ("git gc --prune", "立刻回收悬空对象——误删的存档就真的没了")
-        if sub == "branch" and ("--force" in flags or
-                                any(re.fullmatch(r"-[a-zA-Z]*[fD][a-zA-Z]*", a) for a in flags)):
-            return ("git branch -f/-D", "强制搬动或删除分支指针")
-        if sub == "switch" and "--discard-changes" in flags:
-            return ("git switch --discard-changes", "丢弃未存档的工作")
-        if sub == "push" and ("--delete" in flags or "-d" in flags):
-            return ("git push --delete", "删除远端分支——远端是别人也在看的东西")
-        if sub == "reset":
-            why = reset_moves_pointer(args)
-            if why:
-                return ("git reset", why)
-    return None
-
-
-def write_target_hit(cmd, targets):
-    """只有当写动作『指向』保护路径才算命中——提到路径不算（跑考题 pytest tests/ 必须放行）。
-    大小写不敏感比对（macOS 文件系统默认不区分）。返回命中的保护路径，未命中返回 None。"""
-    # 1) 重定向落点：> 或 >> 后面的那个 token（只许追加的文件放行 >>，拦 >）
-    for m in re.finditer(r"(>>?)\s*([^\s;|&<>]+)", cmd):
-        op, tok = m.group(1), m.group(2).lower()
-        for t in targets:
-            if t in tok:
-                if op == ">>" and append_ok(t):
-                    continue
-                return t
-    # 2) 写型命令的参数区：按管道/分号/换行切段，每段里每个匹配都要看（不能只看第一个）。
-    #    sed -i/tee/truncate 对每个文件参数都是写；mv 也算——把考题搬走等于删掉源文件。
-    for seg in re.split(SEP, cmd):
-        for m in re.finditer(r"\b(sed\s+-i\S*|tee(?:\s+-a\b)?|mv|truncate)\b(.*)", seg):
-            verb, args = m.group(1).lower(), m.group(2).lower()
-            appending = verb.startswith("tee") and "-a" in verb
-            for t in targets:
-                if t in args:
-                    if appending and append_ok(t):
-                        continue
-                    return t
-        # cp 只有目的地算写：从考题目录拷出去是读，必须放行。
-        # 目的地通常是最后一个参数，但 -t <目录> / --target-directory=<目录> 会把它挪到前面。
-        for m in re.finditer(r"\bcp\b(.*)", seg):
-            raw = m.group(1).lower().split()
-            dest = None
-            for i, x in enumerate(raw):
-                if x == "-t" and i + 1 < len(raw):
-                    dest = raw[i + 1]
-                elif x.startswith("--target-directory="):
-                    dest = x.split("=", 1)[1]
-            if dest is None:
-                toks = [x for x in raw if not x.startswith("-")]
-                dest = toks[-1] if toks else None
-            if dest:
-                for t in targets:
-                    if t in dest:
-                        return t
-        # 3) 删也是写的一种：删掉围栏脚本/接线/批次 flag 等于把围栏关掉。
-        #    普通文件的 rm 不受影响（只看参数是否落在保护清单上）。
-        for m in re.finditer(r"\brm\b(.*)", seg):
-            for tok in m.group(1).lower().split():
-                if tok.startswith("-"):
-                    continue
-                for t in targets:
-                    if t in tok:
-                        return t
-    return None
-
-
-def git_rewrite_hit(cmd, protected):
-    """实现期二号绕道：用 git 改写考题内容而不经过编辑工具。
-    checkout/restore 带保护路径 = 把考题回滚成旧版本；apply/revert 的落点从命令行根本看不见。
-    命中返回 (子命令, 白话原因)；未命中返回 None。"""
-    for seg in re.split(SEP, cmd):
-        for m in re.finditer(r"\bgit\s+(checkout|restore)\b(.*)", seg):
-            if any(t in m.group(2).lower() for t in protected):
-                return (m.group(1), "指向考题/规格路径")
-        m = re.search(r"\bgit\s+(apply|revert)\b", seg)
-        if m:
-            return (m.group(1), "补丁/回滚会改哪些文件，围栏从命令行看不见")
-    return None
 
 def main():
     try:
         payload = json.load(sys.stdin)
     except Exception:
         return 0
+    if guard_rules is None:
+        print("[围栏] ⚠️ 判定核心 guard_rules.py 不在 .loopwork/hooks/，本次未做检查。"
+              "请重跑 init_project.sh 补齐围栏。", file=sys.stderr)
+        return 0
     try:
         cmd = (payload.get("tool_input") or {}).get("command") or ""
-        if dangerous_rm(cmd):
-            print("[围栏] rm -rf 类命令被围栏拦下：删除动作必须先问用户，并改用精确路径删除。", file=sys.stderr)
-            return 2
-        for pat, msg in DANGEROUS:
-            if re.search(pat, cmd):
-                print(f"[围栏] {msg}", file=sys.stderr)
-                return 2
-        ban = git_rewrite_ban(cmd)
-        if ban:
-            print(
-                f"[围栏] {ban[0]} 被围栏拦下：{ban[1]}。"
-                "存档只增不减——要改就往前再存一档；确实非做不可，停下来向用户说明，由他自己在终端执行。",
-                file=sys.stderr,
-            )
-            return 2
         root = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()
         state_p = os.path.join(root, ".loopwork", "state.json")
-        if not os.path.exists(state_p):
-            return 0
-        # 永久保护：围栏脚本 / 状态 / 钩子接线 / 批次 flag。
-        # touch 不在写型命令清单里——开批是模型的合法动作；关批只归用户和 Stop 钩子。
-        protected_always = [
-            ".loopwork/hooks",
-            ".loopwork/state.json",
-            ".loopwork/batch.flag",
-            ".claude/settings.json",
-            ".claude/settings.local.json",
-            "journal.md",  # 只许追加：>> / tee -a 放行，覆盖改写删除全拦
-        ]
-        protected_impl = ["tests/", "spec.md", "rules.md"]
-        with open(state_p, encoding="utf-8") as f:
-            st = json.load(f)
-        targets = list(protected_always)
-        if str(st.get("phase", "")) == "implementing":
-            targets += protected_impl
-            g = git_rewrite_hit(cmd, protected_impl)
-            if g:
-                print(
-                    f"[围栏] 拦截：实现期不许用 git {g[0]} 改写考题/历史（{g[1]}）。"
-                    "红考题只能靠写实现变绿；确需回滚或打补丁，停下来向用户说明并征得同意。",
-                    file=sys.stderr,
-                )
-                return 2
-        hit = write_target_hit(cmd, targets)
-        if hit:
-            tail = (
-                '只许追加：记一笔用 `python3 .loopwork/hooks/progress.py journal "…"`，或 `>>` / `tee -a`。'
-                if append_ok(hit)
-                else "保护文件不许绕道修改——需要改就向用户说明并走正规流程。"
-            )
-            print(f"[围栏] 拦截：这条命令在用 shell 改写或删除保护文件（{hit}）。{tail}", file=sys.stderr)
+        phase, in_project = "", os.path.exists(state_p)
+        if in_project:
+            with open(state_p, encoding="utf-8") as f:
+                phase = str(json.load(f).get("phase", ""))
+        verdict = guard_rules.check_bash(cmd, phase=phase, in_project=in_project,
+                                         extra_protected=EXTRA_PROTECTED)
+        if verdict is None and in_project:
+            verdict = archive_gate(root, cmd, phase)
+        if verdict:
+            if guard_log is not None:
+                guard_log.record(root, tool="Bash", target=cmd, rule=verdict[0], phase=phase)
+            print(f"[围栏] {verdict[1]}", file=sys.stderr)
             return 2
         return 0
     except Exception:

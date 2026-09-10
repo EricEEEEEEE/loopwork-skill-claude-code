@@ -22,7 +22,7 @@ def main():
         r = subprocess.run(["bash", INIT, S, "沙盒项目"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
         check("init 建家成功", r.returncode == 0, r.stderr[-200:])
         H = os.path.join(S, ".loopwork", "hooks")
-        for f in ("guard_edits.py", "guard_bash.py", "guard_ask.py", "stop_batch.py",
+        for f in ("guard_rules.py", "guard_edits.py", "guard_bash.py", "guard_ask.py", "stop_batch.py",
                   "audit_log.py", "progress.py", "verify.sh"):
             check(f"围栏进驻 {f}", os.path.exists(os.path.join(H, f)))
         check("钩子接线 settings.json", os.path.exists(os.path.join(S, ".claude", "settings.json")))
@@ -182,11 +182,39 @@ def main():
         open(flag, "w").close()
         setp("round_count", 0); setp("batch_size", 2)
         check("D1 批中顶回", hook("stop_batch.py", {}) == 2)
-        check("D2 flag 记起点+顶回计数", open(flag).read().strip() == "0,0,0,1")
+        fp = lambda: open(flag).read().strip().split(",")
+        check("D2 flag 记起点+顶回计数+进展指纹", fp()[:4] == ["0", "0", "0", "1"] and len(fp()[4]) == 12)
         rc, err = hook2("stop_batch.py", {})
-        check("D2b 无进展第 1 次仅警告", rc == 2 and "没涨" in err and open(flag).read().strip() == "0,0,1,2")
+        check("D2b 无进展第 1 次仅警告", rc == 2 and "没涨" in err and fp()[:4] == ["0", "0", "1", "2"])
         rc, err = hook2("stop_batch.py", {})
         check("D2c 连续 2 次无进展自动停批", rc == 2 and "打转" in err and not os.path.exists(flag))
+        # 无进展 = 轮数没涨 ∧ HEAD 没动 ∧ tasks.md 没动 ∧ BLOCKED.md 没动。
+        # 只看轮数会把「一条硬任务跨两次顶回」误判成打转——两版量同一把尺（guard_rules.PROGRESS_FILES）。
+        gitD = lambda *a: subprocess.run(["git"] + list(a), capture_output=True, text=True,
+                                         encoding="utf-8", errors="replace", env=env, cwd=S)
+        open(flag, "w").close()
+        hook("stop_batch.py", {})                       # 第 1 次：记下起点与指纹
+        with open(os.path.join(S, "BLOCKED.md"), "a", encoding="utf-8") as f:
+            f.write("## B01 · 图表库选择\n")             # 轮数仍没涨，但问题本新增了一条
+        rc, err = hook2("stop_batch.py", {})
+        check("D2d 轮数没涨但问题本新增 → 算进展，不计打转",
+              rc == 2 and "没涨" not in err and fp()[2] == "0", err[-160:])
+        with open(os.path.join(S, "tasks.md"), "a", encoding="utf-8") as f:
+            f.write("- [ ] T04 d\n")                    # 轮数仍没涨，但 tasks.md 动了
+        rc, err = hook2("stop_batch.py", {})
+        check("D2e 轮数没涨但 tasks.md 动了 → 算进展，不计打转",
+              rc == 2 and "没涨" not in err and fp()[2] == "0", err[-160:])
+        gitD("commit", "-qm", "存档: 进展指纹用例", "--allow-empty")
+        rc, err = hook2("stop_batch.py", {})
+        check("D2f 轮数没涨但落了新存档 → 算进展，不计打转",
+              rc == 2 and "没涨" not in err and fp()[2] == "0", err[-160:])
+        rc, err = hook2("stop_batch.py", {})
+        check("D2g 三样全没动才计无进展", rc == 2 and "没涨" in err and fp()[2] == "1", err[-160:])
+        os.remove(flag)
+        os.remove(os.path.join(S, "BLOCKED.md"))
+        with open(os.path.join(S, "tasks.md"), "w", encoding="utf-8") as f:
+            f.write("- [ ] T01 a\n- [ ] T02 b\n- [ ] T03 c\n")
+        open(flag, "w").close()
         with open(flag, "w", encoding="utf-8") as f:
             f.write("0")  # 旧版 flag 格式（纯数字 = 起点）
         setp("round_count", 2)
@@ -239,7 +267,7 @@ def main():
         setp("round_count", 0)
         rc, err = hook2("stop_batch.py", {})
         check("K8 批模式下检测门先于批逻辑，顶回记进 flag 第 4 段",
-              rc == 2 and "检测门" in err and open(flag).read().strip().endswith(",1"), err[-120:])
+              rc == 2 and "检测门" in err and fp()[3] == "1", err[-120:])
         with open(flag, "w", encoding="utf-8") as f:
             f.write("0,,0,6")  # 已顶回 6 次
         rc, err = hook2("stop_batch.py", {})
@@ -332,6 +360,36 @@ def main():
         subprocess.run(["bash", os.path.join(H, "verify.sh")], capture_output=True, env=env, cwd=S)
         nlogs = len([x for x in os.listdir(logdir) if x.startswith("verify-") and x.endswith(".log")])
         check("F5 verify 日志只留最近 20 份", nlogs == 20, f"实际 {nlogs}")
+        # —— T 系列：判卷预警 tripwire（绿灯不等于没作弊；只出声，不改判决） ——
+        def vrun():
+            return subprocess.run(["bash", os.path.join(H, "verify.sh")], capture_output=True,
+                                  text=True, encoding="utf-8", errors="replace", env=env, cwd=S)
+
+        def gitS(*a):
+            return subprocess.run(["git", *a], capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace", env=env, cwd=S)
+        os.makedirs(os.path.join(S, "src"), exist_ok=True)
+        with open(os.path.join(S, "tests", "exam_t.py"), "w", encoding="utf-8") as f:
+            f.write("def test_a():\n    assert 1 == 1\n\ndef test_b():\n    assert 2 == 2\n")
+        with open(os.path.join(S, "src", "t.py"), "w", encoding="utf-8") as f:
+            f.write("def f():\n    return g()\n")
+        gitS("add", "-A"); gitS("commit", "-qm", "tripwire 起点")
+        setp("phase", "implementing")
+        v = vrun()
+        check("T1 干净轮一声不吭（预警不制造噪音）",
+              v.returncode == 0 and "判卷预警" not in v.stdout, v.stdout[-200:])
+        with open(os.path.join(S, "tests", "exam_t.py"), "w", encoding="utf-8") as f:
+            f.write("import pytest\n\n@pytest.mark.skip\ndef test_a():\n    pass\n\ndef test_b():\n    pass\n")
+        with open(os.path.join(S, "src", "t.py"), "w", encoding="utf-8") as f:
+            f.write("# type: ignore\ndef f():\n    try:\n        return g()\n    except Exception:\n        pass\n")
+        v = vrun()
+        check("T2 四种作弊痕迹被逐条点名，且判决不变（还是 exit 0）",
+              v.returncode == 0 and v.stdout.count("⚠️ 判卷预警：") == 4
+              and all(k in v.stdout for k in ("抑制标记", "跳过考题", "吞异常", "删掉了")),
+              v.stdout[-400:])
+        gitS("checkout", "--", "tests/exam_t.py", "src/t.py")
+        os.remove(os.path.join(S, "tests", "exam_t.py")); os.remove(os.path.join(S, "src", "t.py"))
+        gitS("add", "-A"); gitS("commit", "-qm", "tripwire 收尾")
         # F3/F4 多栈裁判：没有 tests/run.sh 时探测到的栈全都要跑（假 npm shim，考题不依赖本机 npm）
         os.remove(os.path.join(S, "tests", "run.sh"))
         shim = os.path.join(S, "shim")
@@ -412,19 +470,80 @@ def main():
         finally:
             shutil.rmtree(S3, ignore_errors=True)
 
+        # ---- L 系列：取证账本 blocks.jsonl（拦了什么要留痕，顶回时要说出来） ----
+        LOG = os.path.join(S, ".loopwork", "logs", "blocks.jsonl")
+        nline = lambda p: sum(1 for _ in open(p, encoding="utf-8")) if os.path.exists(p) else 0
+        setp("stage", "1"); setp("phase", "implementing")   # 出循环阶段：检测门不插话，只看取证
+        hook("stop_batch.py", {})                           # 先推平水位线，从干净起点数
+        base = nline(LOG)
+        hook("guard_edits.py", ed("tests/ledger.py"))
+        hook("guard_bash.py", ba("sed -i s/a/b/ spec.md"))
+        rows = [json.loads(l) for l in open(LOG, encoding="utf-8")][base:] if os.path.exists(LOG) else []
+        check("L1 两次拦截留下两行取证，字段齐、相位对",
+              len(rows) == 2 and all({"ts", "tool", "target", "rule", "phase"} <= set(r) for r in rows)
+              and [r["phase"] for r in rows] == ["implementing"] * 2, str(rows)[:200])
+        with open(os.path.join(S, "tasks.md"), "w", encoding="utf-8") as f:
+            f.write("- [ ] T01 a\n- [ ] T02 b\n- [ ] T03 c\n")
+        open(flag, "w").close()
+        setp("round_count", 0); setp("batch_size", 2)
+        rc, err = hook2("stop_batch.py", {})
+        check("L2 顶回理由带上本轮拦截数", rc == 2 and "拦下 2 次" in err, err[-200:])
+        setp("round_count", 1)
+        rc, err = hook2("stop_batch.py", {})
+        check("L3 水位线已推进：同一批拦截不重复计入下一轮",
+              rc == 2 and "[取证]" not in err, err[-200:])
+
         # ---- V 系列：判卷员定义不许悄悄消失或缩水（两版同一份职责，锁住） ----
         SKILL = os.path.join(REPO, "loopwork")
         rv_p = os.path.join(SKILL, "agents", "reviewer.md")
         check("V1 判卷员定义在", os.path.exists(rv_p))
         rv = open(rv_p, encoding="utf-8").read() if os.path.exists(rv_p) else ""
-        check("V2 判卷员三段齐全（合规/质量/考题盲区 + 固定输出格式）",
-              all(k in rv for k in ("第一段 · 合规", "第二段 · 质量", "第三段 · 考题盲区",
-                                    "判卷结论：", "N 对 M", "verify.sh")))
+        check("V2 判卷员四段齐全（合规/质量/作弊清单/考题盲区 + 固定输出格式）",
+              all(k in rv for k in ("第一段 · 合规", "第二段 · 质量", "第三段 · 作弊清单",
+                                    "第四段 · 考题盲区", "判卷结论：", "N 对 M", "verify.sh")))
+        check("V5 作弊清单八条齐全，且如实交代自动探测只查得动前五条",
+              all(k in rv for k in ("空转修复", "断言放水", "断言消失", "吞异常",
+                                    "抑制检查", "假重构", "查表蒙混", "功能孤岛"))
+              and "0/27" in rv and "只查得动 1–5" in rv)
         check("V3 判卷员如实交代「只读」靠什么兜着（CC 没有系统级只读沙箱）",
               "没有系统级只读沙箱" in rv and "guard_edits.py" in rv)
         s5 = open(os.path.join(SKILL, "references", "stage-5-accept.md"), encoding="utf-8").read()
         check("V4 stage-5 指向判卷员且不吹成物理隔离",
               "agents/reviewer.md" in s5 and "不是系统沙箱" in s5)
+        s0 = open(os.path.join(SKILL, "references", "stage-0-setup.md"), encoding="utf-8").read()
+        check("V6 stage-0 交代围栏管不到供应链：清点别人的钩子 + 搜来的安装指引只转述不执行",
+              all(k in s0 for k in (".claude/settings.json", "AgentBaiting", "只转述",
+                                    "装什么由用户指定", "不再询问")))
+
+        # ---- W 系列：存档闸（先红后绿）。CC 版模型自己 git commit，闸就设在 commit 那一刻。
+        # 红票从 git 历史里读、不从状态开关里读：PreToolUse 看不见 commit 到底成没成，
+        # 存出来的开关会被一次故意失败的 commit 白白骗走一张票，历史骗不了。
+        os.makedirs(os.path.join(S, "src"), exist_ok=True)
+        with open(os.path.join(S, "src", "w.py"), "w", encoding="utf-8") as f:
+            f.write("def w():\n    return 1\n")
+        git("add", "-A"); git("commit", "-qm", "存档: 闸门起点（带实现物）")
+        GC = "git add -A && git commit -m 存档"
+        appw = lambda s: open(os.path.join(S, "src", "w.py"), "a", encoding="utf-8").write(s)
+        setp("phase", "implementing")
+        appw("def w2():\n    return 2\n")
+        check("W1 实现期落绿存档但手里没红票被拦", hook("guard_bash.py", ba(GC)) == 2)
+        with open(os.path.join(S, "tests", "exam_w.py"), "w", encoding="utf-8") as f:
+            f.write("def test_w():\n    assert False\n")
+        git("add", "tests/exam_w.py"); git("commit", "-qm", "存档: W 红考题")
+        check("W2 红存档落进历史后，同一条绿存档命令就放行了", hook("guard_bash.py", ba(GC)) == 0)
+        git("add", "-A"); git("commit", "-qm", "存档: W 绿实现")
+        appw("def w3():\n    return 3\n")
+        check("W3 一张红票只管一轮：绿存档之后再落实现又被拦", hook("guard_bash.py", ba(GC)) == 2)
+        git("checkout", "--", "src/w.py")
+        with open(os.path.join(S, "JOURNAL.md"), "a", encoding="utf-8") as f:
+            f.write("- [存档] 记事一行\n")
+        check("W4 只动台账的记事档不归这道闸管（它不是绿存档）", hook("guard_bash.py", ba(GC)) == 0)
+        setp("phase", "test-writing")
+        appw("def w4():\n    return 4\n")
+        check("W5 非实现期闸门是开的：Stage 0–3 的规格/计划档照样存得下",
+              hook("guard_bash.py", ba(GC)) == 0)
+        check("W6 点名 add 只算点名的落点：git add tests/ 不会被当成整个工作区",
+              hook("guard_bash.py", ba("git add tests/ && git commit -m 红")) == 0)
     finally:
         shutil.rmtree(S, ignore_errors=True)
 
