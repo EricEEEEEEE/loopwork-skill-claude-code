@@ -10,13 +10,13 @@ SKILL.md ④ 是节奏总纲（压缩后仍在），本文是细则。两者冲�
    - 用假数据替身，不连真实外部服务、不联网；
    - 考题文件统一放 `tests/`；
    - **可证伪自查**：写完自问「改坏实现里哪一行，这条考题会红？」——答不上来 = 考题没咬住行为，重写（永真的考题比没有考题更危险）；
-3. **亲眼跑红**：运行考题，确认失败，失败摘要记入 JOURNAL（「红」是证据，证明考卷真的能考住人）。**先把失败考题单独存档**（commit 里只有测试文件）；
+3. **亲眼跑红**：运行考题，确认失败，失败摘要记入 JOURNAL（「红」是证据，证明考卷真的能考住人）。**先把失败考题单独存档**（commit 里只有测试文件），存档后立刻推进基线：`python3 .loopwork/hooks/progress.py set last_round_commit $(git rev-parse HEAD)`——存档即推进基线，忘了这步，检测门会在实现期把你刚存的红考题当违规顶回；
 4. **锁围栏**：`progress.py set phase implementing` —— 此刻起 guard_edits 物理锁死 tests/、spec.md、rules.md；
 5. **写实现**：最小改动让考题变绿；不写投机功能、不顺手重构无关代码；
 6. **验证**：`bash .loopwork/hooks/verify.sh`
    - exit 0 = 绿；非 0 = 继续修；
    - 长输出必须 `> .loopwork/logs/round-N.log 2>&1` 然后 `tail -20`，绝不把整版日志倒进对话；
-7. **收轮**：绿 → `git commit -m "存档: T{编号} {任务名}"` → tasks.md 勾掉 → `progress.py bump-round` → JOURNAL 追加一行：`T02 ✅ 2 红→绿 | 备注`
+7. **收轮**：绿 → `git commit -m "存档: T{编号} {任务名}"` → `progress.py set last_round_commit $(git rev-parse HEAD)`（存档即推进基线）→ tasks.md 勾掉 → `progress.py bump-round` → JOURNAL 追加一行：`progress.py journal "T02 ✅ 2 红→绿 | 备注"`（JOURNAL 只许追加，改写/删除会被围栏拦下）
 8. **进度播报**（一行）：「✅ 3/12 · 记一笔完成 · 下一条：支出列表」
 
 ## 问题本（BLOCKED.md）
@@ -54,6 +54,6 @@ SKILL.md ④ 是节奏总纲（压缩后仍在），本文是细则。两者冲�
 - 开：`touch .loopwork/batch.flag` —— Stop 钩子接管外部计数，这批未跑完时自动把你顶回去继续干；
 - 自动停（钩子强制，不可跳过）：做满一批（batch_size）→ 去验收；只剩受阻任务 → 去清问题本；达轮数上限 → 安全停机；连续 2 次顶回轮数没涨 → 判定原地打转，自动停批并要求汇报（第 1 次没涨只警告提醒）；顶回累计 7 次 → 优雅停批（平台对连续顶回有硬上限 8，第 8 次会被强制放行且 flag 残留，必须先于它收尾）；
 - batch_size 建议 ≤6：顶回安全上限是 7，批太大会被提前截断；
-- 关：批完自动摘 flag；用户随时说「停」→ `rm .loopwork/batch.flag`；
+- 关：批完由钩子自动摘 flag；用户随时喊停 → **请他在自己的终端执行 `rm .loopwork/batch.flag`**——围栏拦住模型删/改 flag（开批是你的动作，关批只归用户和钩子），用户自己的终端不经过围栏；
 - **起飞前三查**（挂机 = 用户不在场，要拍板的事必须起飞前清干净）：① 相位已复位 `test-writing`；② 本批头 batch_size 条任务没有一条需要现场拍板（有就先问完或先标〔卡〕）；③ BLOCKED.md 里没有会卡死整批的存货；
-- 开启前必须量化告知：「这批 N 条任务、预计 X 分钟，期间持续消耗你的 Claude 额度；我不会中途问你问题——要拍板的事记问题本，批末一起算；中途喊停（`rm .loopwork/batch.flag`）随时生效。」
+- 开启前必须量化告知：「这批 N 条任务、预计 X 分钟，期间持续消耗你的 Claude 额度；我不会中途问你问题——要拍板的事记问题本，批末一起算；中途喊停随时生效——在你自己的终端敲 `rm .loopwork/batch.flag` 就停（这个开关只在你手上，我删不了）。」

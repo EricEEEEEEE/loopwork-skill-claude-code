@@ -31,9 +31,28 @@ def main():
             print("[围栏] 拦截：不许改项目文件夹之外的文件。需要的话请先问用户。", file=sys.stderr)
             return 2
         rel_cf = rel.casefold()
-        # 永久保护：围栏与状态
-        if rel_cf.startswith(os.path.join(".loopwork", "hooks").casefold()) or rel_cf == os.path.join(".loopwork", "state.json").casefold():
-            print(f"[围栏] 拦截：{rel} 受保护。围栏脚本不许改；状态请用 progress.py 更新。", file=sys.stderr)
+        # JOURNAL.md 只许追加：日志是历史，能改写的历史就不是证据
+        if os.path.basename(rel_cf) == "journal.md":
+            print(
+                f"[围栏] 拦截：{rel} 只许追加，不许改写（日志是历史，改得动就不算证据）。"
+                '记一笔用 `python3 .loopwork/hooks/progress.py journal "T02 ✅ 2 红→绿 | 备注"`，'
+                "或 shell 里 `>>` / `tee -a` 追加。",
+                file=sys.stderr,
+            )
+            return 2
+        # 永久保护：围栏脚本 / 状态 / 钩子接线 / 批次 flag（改这四样等于把围栏关掉）
+        always = [
+            os.path.join(".loopwork", "state.json"),
+            os.path.join(".loopwork", "batch.flag"),
+            os.path.join(".claude", "settings.json"),
+            os.path.join(".claude", "settings.local.json"),
+        ]
+        if rel_cf.startswith(os.path.join(".loopwork", "hooks").casefold()) or rel_cf in [p.casefold() for p in always]:
+            print(
+                f"[围栏] 拦截：{rel} 受保护。围栏脚本与钩子接线不许改；"
+                "状态请用 progress.py 更新；批次开关归用户和 Stop 钩子。",
+                file=sys.stderr,
+            )
             return 2
         with open(state_p, encoding="utf-8") as f:
             st = json.load(f)

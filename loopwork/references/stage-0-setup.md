@@ -26,12 +26,23 @@
    - 脚本幂等，重复跑安全；
    - 它会：建目录 → git init → 写 `.loopwork/state.json` → 把围栏脚本拷进 `.loopwork/hooks/` → 把钩子写进项目 `.claude/settings.json` → 建 `.gitignore`；
 4. 跑完向用户报告建了什么（一句话 + 文件清单），并解释围栏：「有几台小机器会盯着我：我要是想偷改考题、误删东西，它们会物理拦住我。这是保护你，也是保护我。」
+5. **必跑**一次 `bash <skill目录>/scripts/selftest.sh <项目目录>`（5 秒、不花钱、零模型调用）——它逐条验证围栏是不是真的在岗：底座（python3/git/.git）、七个围栏脚本是否进驻且与技能库同版本、六处钩子接线齐不齐、顶回自停线是否低于平台硬上限、状态文件字段全不全，最后**真喂一条危险命令给围栏看它咬不咬**（接线在 ≠ 拦得住）。把结论一句话报给用户；**有 ❌ 就不许开挂机批**，也不许把安全承诺说得比自检结果满——测出什么说什么。
 
 ## 4. 体检（静默做，只报结论）
 
-- `git --version`（没有 → 引导安装，macOS 直接提示装 Xcode CLT）；
+- `git --version`（没有 git = 没有存档功能，整套方法论的地基没了，必须先装）；
 - 探测可用运行时（node / python3），记入 state.json 的 `env` 字段，Stage 3 选型时用；
 - 已有 `.loopwork/` → 不是新项目！转「点火路由」续接流程。
+
+**git 没装怎么办**（照用户的系统念一条，装完让他回来说一声「装好了」，你再 `git --version` 复验）：
+
+| 系统 | 一句话指引 |
+|---|---|
+| macOS | 在「终端」里敲 `xcode-select --install`，弹窗点「安装」，等几分钟（这是苹果官方的开发者工具包，git 在里面） |
+| Windows | 打开 https://git-scm.com/download/win 下载安装包，一路「下一步」默认选项即可；装完**重开**命令行窗口 |
+| Linux | Debian/Ubuntu：`sudo apt install git`；Fedora：`sudo dnf install git`；Arch：`sudo pacman -S git` |
+
+白话解释一句：「git 是软件世界的『存档』功能——每做完一件事按一次存档，出错随时读档回去。没有它，我做的每一步都没有回头路。」
 
 ## 5. 退出条件
 

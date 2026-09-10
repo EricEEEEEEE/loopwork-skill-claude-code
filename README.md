@@ -108,7 +108,7 @@ Industry lesson (68 documented failure cases): text rules get read, "understood"
 
 ## Status
 
-**v1 built; guard machinery fully regression-tested (67-case suite in [tests/](tests/), run `python3 tests/test_guards.py` in this repo); live cold-start scenarios simulated, real-beginner field test pending.** Release gates in [PROJECT.md](PROJECT.md) §9. Until a real beginner completes a voyage + one solo cycle, treat this as beta.
+**v1 built; guard machinery fully regression-tested (149-case suite in [tests/](tests/), run `python3 tests/test_guards.py` in this repo); live cold-start scenarios simulated, real-beginner field test pending.** Release gates in [PROJECT.md](PROJECT.md) §9. Until a real beginner completes a voyage + one solo cycle, treat this as beta.
 
 - Design doc: [PROJECT.md](PROJECT.md)（含完整用户旅程、五道锁、设计依据）
 - Ecosystem research: [docs/research/](docs/research/)（官方规范 / spec-driven 框架 / 循环纪律 / 小白引导，4 份调研）

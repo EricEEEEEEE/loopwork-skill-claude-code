@@ -471,18 +471,27 @@ loopwork/                      ← 拖进 ~/.claude/skills/ 即安装
 
 | 版本 | 内容 | 状态 |
 |---|---|---|
-| **v1** | Claude Code 版：七阶段＋快速通道＋五道锁，中文优先 | ← 当前，文档阶段 |
-| v1.x | 根据真实小白试用反馈迭代；闹钟档（定时自动点火）；英文 README；GitHub 公开 | 规划 |
-| v2 | Codex 版（独立适配：钩子体系、指令差异） | 排队 |
-| v2.x | 与专业版（eric-loop-standard）双向借鉴：小白版毕业的用户有升级路径 | 构想 |
+| **v1** | Claude Code 版：七阶段＋快速通道＋五道锁，中文优先 | ✅ 已发布（github.com/EricEEEEEEE/loopwork-skill-claude-code） |
+| **v2** | Codex 版：同一套方法论，换一套执法机器（沙箱＋规则＋Stop 检测门＋只读判卷员） | ✅ 已发布（github.com/EricEEEEEEE/loopwork-skill-codex） |
+| **v2.1** | 两版对等化：绕过面收口、JOURNAL 只增不减、检测门互移、围栏规则单一真相源 | ← 当前 |
+| v2.x | 根据真实小白试用反馈迭代；闹钟档（定时自动点火）；英文 README | 规划 |
+| v3 | 与专业版（eric-loop-standard）双向借鉴：小白版毕业的用户有升级路径 | 构想 |
 
 ---
 
 ## 12. 待定决策（需要项目所有者拍板）
 
-1. **对外名称**：`loopwork` 在 GitHub 已被同领域组织占用（github.com/loopwork，AI agent 工具商，loopwork.com）。方法论内部名可保留「Loopwork」，但公开 repo/skill 名建议避让。候选：`loopway` / `loopcraft` / `guided-loop` / 或以中文品牌直译。**建议尽早定，因为 skill 目录名 = 命令名。**
-2. **License**：推 GitHub 时用 MIT（最大化传播）还是保留版权（考虑自媒体/产品化）？
-3. **英文版优先级**：v1 就双语，还是中文验证后再国际化？
+已定（不再讨论）：
+
+- **对外名称**：方法论与 skill 目录名保留 `loopwork`（命令名 = 目录名）；两个公开 repo 用带后缀的名字与 github.com/loopwork 那家 AI agent 工具商区分：`loopwork-skill-claude-code` / `loopwork-skill-codex`。
+- **License**：MIT（两版 repo 均已带 LICENSE），优先传播。
+- **英文版优先级**：中文先行。README 已双语摘要，全套 references 的英文化留到真实用户提出需求再做——没人用的翻译是浪费。
+
+仍待拍板：
+
+1. **发行渠道**：只留 GitHub 手动安装，还是进 Claude Code plugin marketplace / Codex skills 索引？（进索引 = 要接受陌生人开 issue，得先有精力接。）
+2. **真实小白试用**：v2.1 之后需要至少 1 个非工程师用户从 Stage 0 走到进环，才谈得上「验证过」。人选和陪跑时间待定。
+3. **两版同步策略**：围栏规则收进 `guard_rules.py` 单一真相源（v2.1 收口项）+ 两版套件各自跑。若将来分叉加剧，是否合并成单仓 monorepo（两个安装目录从同一源生成）？
 
 ---
 
